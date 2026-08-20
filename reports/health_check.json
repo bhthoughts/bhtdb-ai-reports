@@ -530,6 +530,7 @@
         "sql": "SELECT\n    time,\n    alert\nFROM (\n    SELECT\n        alert.record_id,\n        alert.originating_timestamp AT TIME ZONE SESSIONTIMEZONE AS time,\n        alert.message_text AS alert\n    FROM\n        v$diag_alert_ext alert\n    ORDER BY\n        alert.record_id DESC\n    FETCH FIRST 2000 ROWS ONLY\n)\nORDER BY\n    record_id DESC;",
         "enabled": true
       }
-    ]
+    ],
+    "origin": "community"
   }
 }
