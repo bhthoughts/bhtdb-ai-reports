@@ -5,6 +5,17 @@ the read-only Oracle database assistant. Every `.json` file under [`reports/`](r
 is a self-contained report: a named set of read-only SQL queries plus optional
 AI analysis instructions.
 
+## Available reports
+
+<!-- reports-table:start -->
+| Report | SQLs | Author | Last updated |
+|---|---|---|---|
+| [Health Check](reports/health_check.json) | 87 | @bht | 2026-08-20 |
+<!-- reports-table:end -->
+
+Author and last-updated come from this repository's git history, maintained
+automatically by CI — see [`index.json`](index.json).
+
 ## Using these reports
 
 Inside BHTDB.ai, open the **Reports** tab and click **Community** — the app
