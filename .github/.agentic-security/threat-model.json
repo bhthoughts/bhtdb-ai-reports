@@ -1,7 +1,68 @@
 {
   "entities": [],
-  "boundaries": [],
-  "assets": [],
-  "threats": [],
-  "attackTrees": []
+  "boundaries": [
+    {
+      "from": "application",
+      "to": "datastore:default",
+      "kind": "asset-boundary"
+    }
+  ],
+  "assets": [
+    {
+      "kind": "datastore",
+      "id": "datastore:default",
+      "name": "Application Database"
+    }
+  ],
+  "threats": [
+    {
+      "stride": "T",
+      "strideLabel": "Tampering",
+      "cwe": "CWE-89",
+      "family": "sql-injection",
+      "severity": "high",
+      "file": "validate_reports.py",
+      "line": 33,
+      "vuln": "SQL Injection (f-string SQL assigned to variable)",
+      "finding_id": "sql-injection:validate_reports.py:33:CWE-89",
+      "affectsAsset": "datastore:default",
+      "atEntity": null
+    },
+    {
+      "stride": "I",
+      "strideLabel": "Information Disclosure",
+      "cwe": "CWE-89",
+      "family": "sql-injection",
+      "severity": "high",
+      "file": "validate_reports.py",
+      "line": 33,
+      "vuln": "SQL Injection (f-string SQL assigned to variable)",
+      "finding_id": "sql-injection:validate_reports.py:33:CWE-89",
+      "affectsAsset": "datastore:default",
+      "atEntity": null
+    }
+  ],
+  "attackTrees": [
+    {
+      "root": "Compromise datastore: Application Database",
+      "asset_id": "datastore:default",
+      "leaves": [
+        {
+          "label": "Tampering via sql-injection (CWE-89)",
+          "severity": "high",
+          "file": "validate_reports.py",
+          "line": 33,
+          "finding_id": "sql-injection:validate_reports.py:33:CWE-89"
+        },
+        {
+          "label": "Information Disclosure via sql-injection (CWE-89)",
+          "severity": "high",
+          "file": "validate_reports.py",
+          "line": 33,
+          "finding_id": "sql-injection:validate_reports.py:33:CWE-89"
+        }
+      ],
+      "severity": "high"
+    }
+  ]
 }

@@ -45,8 +45,11 @@ Rules for contributions:
 - **Self-contained and generic.** No credentials, no host names, no schema or
   data from a real environment, and no values hardcoded from one database's
   results.
-- **Named to be found.** The report `name` should say what it does; it is also
-  the overwrite key on import, so make it unique and stable.
+- **Named to be found — and unique.** The report `name` is the identity the
+  app uses to detect updates, so it must be unique across this repository
+  (case-insensitive). CI rejects a pull request that reuses an existing name;
+  pick another one. Renaming a published report later effectively makes it a
+  new report for everyone who imported it.
 - **English preferred** for names and descriptions, so the widest audience can
   read them. The analysis instructions may pin any output language.
 

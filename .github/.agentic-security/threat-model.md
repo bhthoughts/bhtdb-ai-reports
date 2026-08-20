@@ -11,12 +11,29 @@ flowchart TB
   subgraph External
   end
   subgraph Application
+    datastore_default{{"datastore: Application Database"}}
   end
+  application -.-> datastore_default
 ```
 
 ## Assets
 
+- **datastore**: Application Database — at `(global)`
 
 ## STRIDE threats
 
+### Tampering (1)
+
+- [high] **sql-injection** (CWE-89) at `validate_reports.py:33` — SQL Injection (f-string SQL assigned to variable)
+
+### Information Disclosure (1)
+
+- [high] **sql-injection** (CWE-89) at `validate_reports.py:33` — SQL Injection (f-string SQL assigned to variable)
+
 ## Attack trees
+
+### Compromise datastore: Application Database
+Severity rollup: **high**
+
+- [high] Tampering via sql-injection (CWE-89) — `validate_reports.py:33`
+- [high] Information Disclosure via sql-injection (CWE-89) — `validate_reports.py:33`

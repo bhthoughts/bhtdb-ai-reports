@@ -1,0 +1,20 @@
+# Refuse a PR (or a direct push) that would break the report namespace:
+# duplicate report names, invalid envelopes, or SQL that is not a single
+# SELECT/WITH. Duplicate names matter most — the name is the identity the app
+# uses for updates, so two files sharing one would silently overwrite each
+# other on users' machines. With this gate the maintainer never renames
+# anything by hand: the PR stays red until the contributor picks a free name.
+name: Validate reports
+on:
+  pull_request:
+    paths: ["reports/**"]
+  push:
+    branches: [main]
+    paths: ["reports/**"]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 .github/validate_reports.py
