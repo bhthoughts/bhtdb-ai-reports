@@ -1,0 +1,535 @@
+{
+  "schema_version": 1,
+  "kind": "report",
+  "report": {
+    "id": "",
+    "name": "Health Check",
+    "description": "Health check completo do banco de dados Oracle: identificação, patches, parâmetros, memória, performance, SQL, objetos de schema, storage, backup/Data Guard, segurança e alert log — no padrão de relatório de entrega a cliente.",
+    "analysis_instructions": "IDIOMA: escreva TODO o relatório em português (pt-BR). Não traduza jargão técnico consagrado (tablespace, redo log, standby, grant, bind variable, health check etc.).\n\nThe line above defines the report's OUTPUT LANGUAGE. Write all report text, including section titles, in that language — keeping the numbering, order and meaning below unchanged.\n\nThis is a formal HEALTH CHECK for customer delivery. Every execution must produce the SAME structure, in this exact order, with these numbered titles. Each query's description starts with a tag [4] or [5.x] naming the section where it must be handled — respect that mapping.\n\nFORMAT (Markdown): each section 1-6 title as a level-2 heading (\"## 1. Database Analysis\"); subsections 4.x and 5.x as level-3 headings (\"### 5.1 Patches and version\"). Blank line between titles, paragraphs, lists and tables. Tables ALWAYS as complete Markdown — header row, |---|---| separator line and one line per record; never loose '|' cells in running text. The identification in section 4.1 must be a table in this format.\n\n1. Database Analysis — opening that identifies the database (name, version, platform, CPUs, memory, size — from the \"System Under Observation - Database\" query) and the goal: report opportunities to improve configuration and performance and reduce the risk of downtime.\n\n2. Executive Summary — overview of the database's state + a list \"If applied, the recommendations in this report can lead to:\" with benefits derived from THIS run's findings.\n\n3. Action Items Summary — short bullets with ALL actions recommended in section 5, in the same order they appear there. No item may exist here without existing in section 5, and vice versa.\n\n4. System Under Observation — 4.1 Database (identification table); 4.2 Options enabled/disabled and Features used (summarize; include the note: \"this is not a licensing report, only the current state\"); 4.3 Observation window (what the data covers: current state, caches and history available at collection time).\n\n5. Findings and Recommendations — subsections ALWAYS in this order, ALL present even without findings:\n5.1 Patches and version · 5.2 Database parameters · 5.3 Memory (SGA/PGA and advisors) · 5.4 Performance and statistics · 5.5 SQL efficiency (literals, cursors, parse) · 5.6 Schema objects and indexes · 5.7 Storage · 5.8 Backup, recovery and Data Guard · 5.9 Security and auditing · 5.10 Alert Log\n\nWithin each subsection:\n- For each real problem: (a) what was observed, citing real numbers and objects from the results; (b) why it is a problem and what it can cause — educate the reader, like a senior consultant; (c) \"Recommendation:\" with the concrete action. Order by severity: downtime/data-loss risk > performance > housekeeping.\n- After the findings, close with the line \"Verified with no findings: ...\" listing that subsection's checks that came back clean. A fully clean subsection = only that line.\n- A clean check never gets the (a)(b)(c) format: only the \"Verified with no findings\" line.\n- An empty result means \"no problem\" only when the query's description says so; for inventories (RMAN backups, redo, archive destinations) empty is a FINDING.\n- A query marked \"NOT COLLECTED\" never counts as verified: handle it in section 6.\n- Memory recommendations only from the advisors (estimated factors); if the curve shows irrelevant gain, state that the current size is adequate.\n- Recommend nothing without evidence in the results. Never invent values.\n\n6. Queries not collected — list each \"NOT COLLECTED\" query with its ORA error and the likely cause (missing grant/feature). If there are none: \"All queries were collected successfully.\"\n\nFinal rules: use exclusively this run's results; operating-system items (kernel, OS limits) are not collected — do not invent them; never mention other customers, databases or previous runs; professional, direct, didactic tone.",
+    "updated_at": "",
+    "sqls": [
+      {
+        "name": "System Under Observation - Database",
+        "description": "[4] Identificação do banco: nome, versão, host, tamanho, memória, CPUs, SO. Base da abertura (seção 1) e da seção 4.1.",
+        "sql": "WITH /* 1a.1 */\nrac AS (\n    SELECT /*+ MATERIALIZE NO_MERGE */\n           COUNT(*) instances,\n           CASE COUNT(*) WHEN 1 THEN 'Single-instance'\n                ELSE COUNT(*) || '-node RAC cluster' END db_type\n    FROM gv$instance\n),\nmem AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(value) target\n          FROM gv$system_parameter2 WHERE name = 'memory_target'),\nsga AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(value) target\n          FROM gv$system_parameter2 WHERE name = 'sga_target'),\npga AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(value) target\n          FROM gv$system_parameter2 WHERE name = 'pga_aggregate_target'),\ndb_block AS (SELECT /*+ MATERIALIZE NO_MERGE */ value bytes\n               FROM gv$system_parameter2 WHERE name = 'db_block_size'),\ndb AS (SELECT /*+ MATERIALIZE NO_MERGE */ name, platform_name FROM v$database),\npdbs AS (SELECT /*+ MATERIALIZE NO_MERGE */ name, open_mode FROM v$pdbs),\ninst AS (SELECT /*+ MATERIALIZE NO_MERGE */ host_name, version db_version FROM v$instance),\ndata AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(bytes) bytes, COUNT(*) files,\n                COUNT(DISTINCT ts#) tablespaces FROM v$datafile),\ntemp AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(bytes) bytes FROM v$tempfile),\nlog AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(bytes) * MAX(members) bytes FROM v$log),\ncontrol AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(block_size * file_size_blks) bytes\n              FROM v$controlfile),\ncore AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(value) cnt\n           FROM gv$osstat WHERE stat_name = 'NUM_CPU_CORES'),\ncpu AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(value) cnt\n          FROM gv$osstat WHERE stat_name = 'NUM_CPUS'),\npmem AS (SELECT /*+ MATERIALIZE NO_MERGE */ SUM(value) bytes\n           FROM gv$osstat WHERE stat_name = 'PHYSICAL_MEMORY_BYTES')\nSELECT 'Database name:' system_item, db.name system_value FROM db\nUNION ALL\nSELECT 'PDB: ' || name, 'Open mode: ' || open_mode FROM pdbs\nUNION ALL\nSELECT 'Oracle Database version:', inst.db_version FROM inst\nUNION ALL\nSELECT 'Host name:', inst.host_name FROM inst\nUNION ALL\nSELECT 'Database block size:',\n       TRIM(TO_CHAR(db_block.bytes / POWER(2,10), '90')) || ' KB' FROM db_block\nUNION ALL\nSELECT 'Database size:',\n       TRIM(TO_CHAR(ROUND((data.bytes + temp.bytes + log.bytes + control.bytes)\n            / POWER(10,12), 3), '999,999,990.000')) || ' TB'\n  FROM data, temp, log, control\nUNION ALL\nSELECT 'Datafiles:', data.files || ' (on ' || data.tablespaces || ' tablespaces)' FROM data\nUNION ALL\nSELECT 'Instance configuration:', rac.db_type FROM rac\nUNION ALL\nSELECT 'Database memory:',\n       CASE WHEN mem.target > 0 THEN 'MEMORY ' ||\n            TRIM(TO_CHAR(ROUND(mem.target / POWER(2,30), 1), '999,990.0')) || ' GB, ' END ||\n       CASE WHEN sga.target > 0 THEN 'SGA ' ||\n            TRIM(TO_CHAR(ROUND(sga.target / POWER(2,30), 1), '999,990.0')) || ' GB, ' END ||\n       CASE WHEN pga.target > 0 THEN 'PGA ' ||\n            TRIM(TO_CHAR(ROUND(pga.target / POWER(2,30), 1), '999,990.0')) || ' GB, ' END ||\n       CASE WHEN mem.target > 0 THEN 'AMM'\n            ELSE CASE WHEN sga.target > 0 THEN 'ASMM' ELSE 'MANUAL' END END\n  FROM mem, sga, pga\nUNION ALL\nSELECT 'Physical CPUs:', core.cnt || ' cores, on ' || rac.db_type FROM rac, core\nUNION ALL\nSELECT 'Oracle CPUs:', cpu.cnt || ' CPUs (threads), on ' || rac.db_type FROM rac, cpu\nUNION ALL\nSELECT 'Physical RAM:',\n       TRIM(TO_CHAR(ROUND(pmem.bytes / POWER(2,30), 1), '999,990.0')) || ' GB, on ' || rac.db_type\n  FROM rac, pmem\nUNION ALL\nSELECT 'Operating system:', db.platform_name FROM db;",
+        "enabled": true
+      },
+      {
+        "name": "Database properties",
+        "description": "[4] Propriedades do banco (NLS, timezone, default tablespaces). Citar apenas o que for relevante.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.10 */\n       *\n  FROM database_properties;",
+        "enabled": true
+      },
+      {
+        "name": "License",
+        "description": "[4] Sessões e CPUs registradas em gv$license. Informativo.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.16 */\n       *\n  FROM gv$license\n ORDER BY\n       inst_id;",
+        "enabled": true
+      },
+      {
+        "name": "Database options - Enabled",
+        "description": "[4] Options habilitadas (v$option). Não é relatório de licenciamento; apenas o estado atual.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.4 */\n       *\n  FROM v$option\nWHERE value='TRUE';",
+        "enabled": true
+      },
+      {
+        "name": "Database options - Disabled",
+        "description": "[4] Options desabilitadas (v$option). Mesma nota de licenciamento.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.4 */\n       *\n  FROM v$option\nWHERE value='FALSE';",
+        "enabled": true
+      },
+      {
+        "name": "Database Features Used",
+        "description": "[4] Features já usadas (dba_feature_usage_statistics, resumo com datas). Aponte em 5.9 features de pack (AWR, Tuning Advisor) usadas se a edição/parâmetros indicarem falta de licença.",
+        "sql": "SELECT\n    d.name,\n    x.name,\n    x.detected_usages,\n    x.currently_used,\n    x.first_usage_date,\n    x.last_usage_date,\n    x.description\nFROM\n    dba_feature_usage_statistics x\n    left join v$database d on d.dbid = x.dbid\nWHERE\n    d.name is not null\nORDER BY\n    x.name,\n    x.version;",
+        "enabled": true
+      },
+      {
+        "name": "Feature Usage Statistics (raw)",
+        "description": "[4] Dump completo de dba_feature_usage_statistics; detalhe do anterior, para consulta.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.15 */\n       x.*\n\t   --,c.name con_name\n  FROM dba_feature_usage_statistics x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n       x.name,\n       x.version;",
+        "enabled": true
+      },
+      {
+        "name": "DBA Registry",
+        "description": "[5.1] Componentes instalados e status (dba_registry). Componente INVALID é achado.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.11 */\n       x.*\n\t   --,c.name con_name\n  FROM dba_registry x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\nORDER BY\n       --x.con_id,\n\t   x.comp_id;",
+        "enabled": true
+      },
+      {
+        "name": "Registry SQL Patch",
+        "description": "[5.1] Patches aplicados (dba_registry_sqlpatch). Compare a data/versão do último Release Update com a data atual; defasagem grande = achado com recomendação de aplicar RU recente (MOS 742060.1).",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.12 */\n       x.*\n       --,c.name con_name\n  FROM dba_registry_sqlpatch x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       2,\n     1\n\t   --,x.con_id;",
+        "enabled": true
+      },
+      {
+        "name": "Registry history",
+        "description": "[5.1] Histórico de upgrades e patches do dicionário.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.13 */\n       x.*\n\t   --,c.name con_name\n  FROM dba_registry_history x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY 1\n\t   --,x.con_id;",
+        "enabled": true
+      },
+      {
+        "name": "Registry hierarchy",
+        "description": "[5.1] Hierarquia de componentes do registry. Informativo.",
+        "sql": "-- incarnation from health_check_4.4 (Jon Adams and Jack Agustin)\nSELECT /*+  NO_MERGE  */ /* 1a.14 */\n       x.*\n\t   --,c.name con_name\n  FROM dba_registry_hierarchy x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       1, 2, 3;",
+        "enabled": true
+      },
+      {
+        "name": "Non-default Init Parameters",
+        "description": "[5.2] Parâmetros não-default (por thread) — base principal da análise de parâmetros. Julgue os valores contra boas práticas da versão/edição (ex.: recyclebin OFF, fast_start_mttr_target, filesystemio_options, cursor_sharing, processes vs sessions).",
+        "sql": "SELECT num, '*' \"THREAD#\", name, value /* 2e.222 */\n  FROM v$PARAMETER WHERE NUM IN (\nSELECT num\n  FROM v$parameter\n WHERE (isdefault = 'FALSE' OR ismodified <> 'FALSE')\n   AND name NOT LIKE 'nls%'\n MINUS\nSELECT num\n  FROM gv$parameter gvp, gv$instance gvi\n WHERE num IN (\nSELECT DISTINCT gvpa.num\n  FROM gv$parameter gvpa, gv$parameter gvpb\n WHERE gvpa.num = gvpb.num\n   AND  gvpa.value <> gvpb.value\n   AND (gvpa.isdefault = 'FALSE' OR gvpa.ismodified <> 'FALSE')\n   AND gvpa.name NOT LIKE 'nls%')\n   AND gvi.inst_id = gvp.inst_id\n   AND (gvp.isdefault = 'FALSE' OR gvp.ismodified <> 'FALSE')\n   AND gvp.name NOT LIKE 'nls%')\n UNION\nSELECT num, TO_CHAR(thread#) \"THREAD#\", name, value\n  FROM gv$parameter gvp, gv$instance gvi\n WHERE num IN (\nSELECT DISTINCT gvpa.num\n  FROM gv$parameter gvpa, gv$parameter gvpb\n WHERE gvpa.num = gvpb.num\n   AND gvpa.value <> gvpb.value\n   AND (gvpa.isdefault = 'FALSE' OR gvpa.ismodified <> 'FALSE')\n   AND gvp.name NOT LIKE 'nls%')\n   AND gvi.inst_id = gvp.inst_id\n   AND (gvp.isdefault = 'FALSE' OR gvp.ismodified <> 'FALSE')\n   AND gvp.name NOT LIKE 'nls%'\n ORDER BY 1, 2;",
+        "enabled": true
+      },
+      {
+        "name": "Modified parameters",
+        "description": "[5.2] Parâmetros alterados em runtime (ISMODIFIED). Divergência memória x spfile merece nota.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.21 */\n       x.*\n\t   --,c.name con_name\n  FROM gv$system_parameter2 x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE x.ismodified = 'MODIFIED'\n ORDER BY\n       --x.con_id,\n       x.name,\n       x.inst_id,\n       x.ordinal;",
+        "enabled": true
+      },
+      {
+        "name": "All parameters (raw)",
+        "description": "[5.2] Dump completo de gv$system_parameter2 para consulta humana; a análise de parâmetros deve se basear nas consultas de non-default/modificados, não nesta amostra.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.22 */\n       x.*\n\t   --,c.name con_name\n  FROM gv$system_parameter2 x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n       x.name,\n       x.inst_id,\n       x.ordinal;",
+        "enabled": true
+      },
+      {
+        "name": "Parallel Parameters",
+        "description": "[5.2] Parâmetros parallel% incluindo ocultos (requer grant em X$; pode falhar). Avalie coerência de parallel_max_servers/threshold com as CPUs da seção 4.",
+        "sql": "select name, description, value, isdefault, ismodified, isset\nfrom\n(\nselect flag,name,value,isdefault,ismodified,\ncase when isdefault||ismodified = 'TRUEFALSE' then 'FALSE' else 'TRUE' end isset ,\ndescription\nfrom\n   (\n       select\n            decode(substr(i.ksppinm,1,1),'_',2,1) flag\n            , i.ksppinm name\n            , sv.ksppstvl value\n            , sv.ksppstdf  isdefault\n--            , decode(bitand(sv.ksppstvf,7),1,'MODIFIED',4,'SYSTEM_MOD','FALSE') ismodified\n            , decode(bitand(sv.ksppstvf,7),1,'TRUE',4,'TRUE','FALSE') ismodified\n, i.KSPPDESC description\n         from sys.x$ksppi  i\n            , sys.x$ksppsv sv\n        where i.indx = sv.indx\n   )\n)\nwhere name like nvl('%parallel%',name)\nand flag != 3\norder by flag,replace(name,'_','');",
+        "enabled": true
+      },
+      {
+        "name": "Result Cache parameters",
+        "description": "[5.2] Parâmetros do result cache.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 3d.272 */\n       inst_id, name \"PARAMETER\", value, isdefault, ismodified\n  FROM gv$system_parameter2\n WHERE name IN ('result_cache_mode','result_cache_max_size','result_cache_max_result')\n ORDER BY 2,1,3;",
+        "enabled": true
+      },
+      {
+        "name": "Result Cache status",
+        "description": "[5.2] Status do result cache (pode falhar sem EXECUTE em DBMS_RESULT_CACHE).",
+        "sql": "SELECT dbms_result_cache.status FROM dual;",
+        "enabled": true
+      },
+      {
+        "name": "Memory Dynamic Components",
+        "description": "[5.3] Tamanho atual dos componentes de memória (gv$memory_dynamic_components).",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1d.50 */\n       *\n  FROM gv$memory_dynamic_components;",
+        "enabled": true
+      },
+      {
+        "name": "Memory Resize Operations",
+        "description": "[5.3] Operações de resize recentes; resizes frequentes entre buffer cache e shared pool = pressão de memória (achado).",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1d.55 */\n       *\n  FROM gv$memory_resize_ops\n ORDER BY\n       inst_id,\n       start_time DESC,\n       component;",
+        "enabled": true
+      },
+      {
+        "name": "Memory Target Advice",
+        "description": "[5.3] Advisor de memory_target (vazio se AMM desligado). ESTD_DB_TIME_FACTOR menor em tamanho maior = ganho real.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1d.51 */\n       *\n  FROM gv$memory_target_advice;",
+        "enabled": true
+      },
+      {
+        "name": "SGA Target Advice",
+        "description": "[5.3] Advisor de SGA: procure onde ESTD_PHYSICAL_READS para de cair. Recomendar aumento apenas com ganho claro E RAM física disponível (seção 4).",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1d.52 */\n       *\n  FROM gv$sga_target_advice;",
+        "enabled": true
+      },
+      {
+        "name": "PGA Target Advice",
+        "description": "[5.3] Advisor de PGA: ESTD_OVERALLOC_COUNT > 0 = PGA subdimensionado (achado); recomendar o tamanho onde o overalloc zera e o cache hit estabiliza.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1d.53 */\n       *\n  FROM gv$pga_target_advice;",
+        "enabled": true
+      },
+      {
+        "name": "System Wait Class",
+        "description": "[5.4] Tempo acumulado por wait class DESDE O STARTUP (não é janela). Descreva o perfil (CPU vs User I/O vs Commit...) com essa ressalva explícita. Ignore a classe Idle (não é espera real).",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 3d.271 */\n       x.*\n  FROM gv$system_wait_class x\n ORDER BY\n       --x.con_id,\n\t   x.inst_id,\n       x.time_waited DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Tables with Outdated Stats",
+        "description": "[5.4] Tabelas de aplicação com estatísticas há mais de 31 dias. Volume grande = coleta deficiente, risco de planos ruins; recomendar revisão da janela/auto task.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 3c.260 */\n       --s.con_id,\n\t   s.owner, s.table_name, s.num_rows, s.last_analyzed, s.stale_stats, s.stattype_locked\n\t   --,c.name con_name\n  FROM dba_tab_statistics s,\n       dba_tables t\n\t   --LEFT OUTER JOIN v$containers c ON c.con_id = t.con_id\n WHERE s.object_type = 'TABLE'\n   AND s.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND s.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n   AND s.last_analyzed < SYSDATE - 31\n   AND s.table_name NOT LIKE 'BIN%'\n   AND NOT (s.table_name LIKE '%TEMP' OR s.table_name LIKE '%\\_TEMP\\_%' ESCAPE '\\')\n   --AND t.con_id = s.con_id\n   AND t.owner = s.owner\n   AND t.table_name = s.table_name\n   AND t.temporary = 'N'\n   AND NOT EXISTS (\nSELECT NULL\n  FROM dba_external_tables e\n WHERE e.owner = s.owner\n   --AND e.con_id = s.con_id\n   AND e.table_name = s.table_name\n)\n ORDER BY\n       --s.con_id,\n       s.owner, s.table_name;",
+        "enabled": true
+      },
+      {
+        "name": "Tables with Locked Stats",
+        "description": "[5.4] Tabelas com estatísticas travadas; confirmar se o lock é intencional (ex.: tabelas volatile) ou esquecimento.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 3c.261 */\n       --s.con_id,\n\t   s.owner, s.table_name, t.temporary, s.num_rows, s.last_analyzed, s.stale_stats, s.stattype_locked, e.type_name external_table_type\n\t   --,c.name con_name\n  FROM dba_tab_statistics s\n       LEFT OUTER JOIN dba_external_tables e ON e.owner = s.owner AND e.table_name = s.table_name --AND e.con_id = s.con_id\n\t   --LEFT OUTER JOIN v$containers c ON c.con_id = s.con_id\n      ,dba_tables t\n WHERE s.object_type = 'TABLE'\n   AND s.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND s.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n   AND s.stattype_locked IS NOT NULL\n   AND s.table_name NOT LIKE 'BIN%'\n   --AND t.con_id = s.con_id\n   AND t.owner = s.owner\n   AND t.table_name = s.table_name\n ORDER BY\n       --s.con_id,\n       s.owner, s.table_name;",
+        "enabled": true
+      },
+      {
+        "name": "Stats History Availability",
+        "description": "[5.4] Disponibilidade/retensão do histórico de estatísticas (restore de stats).",
+        "sql": "SELECT DBMS_STATS.get_stats_history_availability availability,\n       DBMS_STATS.get_stats_history_retention retention\n  FROM dual;",
+        "enabled": true
+      },
+      {
+        "name": "DOP on tables",
+        "description": "[5.4] Contagem de tabelas com DOP fixo > 1 ou DEFAULT por owner. DOP fixo em tabela dispara paralelismo involuntário em qualquer query; recomendar revisão.",
+        "sql": "WITH x AS (\nSELECT /*+  NO_MERGE  */ /* 2a.90 */\n       --con_id,\n       owner,\n       SUM(CASE WHEN TRIM(degree) = 'DEFAULT' THEN 1 ELSE 0 END) \"DEFAULT\",\n       SUM(CASE WHEN TRIM(degree) = '0' THEN 1 ELSE 0 END) \"0\",\n       SUM(CASE WHEN TRIM(degree) = '1' THEN 1 ELSE 0 END) \"1\",\n       SUM(CASE WHEN TRIM(degree) = '2' THEN 1 ELSE 0 END) \"2\",\n       SUM(CASE WHEN TRIM(degree) IN ('3', '4') THEN 1 ELSE 0 END) \"3-4\",\n       SUM(CASE WHEN TRIM(degree) IN ('5', '6', '7', '8') THEN 1 ELSE 0 END) \"5-8\",\n       SUM(CASE WHEN TRIM(degree) IN ('9', '10', '11', '12', '13', '14', '15', '16') THEN 1 ELSE 0 END) \"9-16\",\n       SUM(CASE WHEN LENGTH(TRIM(degree)) = 2 AND TRIM(degree) BETWEEN '17' AND '32' THEN 1 ELSE 0 END) \"17-32\",\n       SUM(CASE WHEN LENGTH(TRIM(degree)) = 2 AND TRIM(degree) BETWEEN '33' AND '64' THEN 1 ELSE 0 END) \"33-64\",\n       SUM(CASE WHEN (LENGTH(TRIM(degree)) = 2 AND TRIM(degree) BETWEEN '65' AND '99') OR\n                     (LENGTH(TRIM(degree)) = 3 AND TRIM(degree) BETWEEN '100' AND '128') THEN 1 ELSE 0 END) \"65-128\",\n       SUM(CASE WHEN LENGTH(TRIM(degree)) = 3 AND TRIM(degree) BETWEEN '129' AND '256' THEN 1 ELSE 0 END) \"129-256\",\n       SUM(CASE WHEN LENGTH(TRIM(degree)) = 3 AND TRIM(degree) BETWEEN '257' AND '512' THEN 1 ELSE 0 END) \"257-512\",\n       SUM(CASE WHEN (LENGTH(TRIM(degree)) = 3 AND TRIM(degree) > '512') OR\n                     (LENGTH(TRIM(degree)) > 3 AND TRIM(degree) != 'DEFAULT') THEN 1 ELSE 0 END) \"HIGHER\"\n  FROM dba_tables x\n WHERE owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\nHAVING COUNT(*) > SUM(CASE WHEN TRIM(degree) IN ('0', '1') THEN 1 ELSE 0 END)\n GROUP BY\n       --con_id,\n       owner\n)\nSELECT x.*\n       --,c.name con_name\n  FROM x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n       x.owner;",
+        "enabled": true
+      },
+      {
+        "name": "DOP on indexes",
+        "description": "[5.4] Mesma leitura para índices (índice com DOP > 1 costuma ser resto de rebuild paralelo).",
+        "sql": "WITH x as (\nSELECT /*+  NO_MERGE  */ /* 2a.92 */\n       --con_id,\n       owner,\n       SUM(CASE WHEN TRIM(degree) = 'DEFAULT' THEN 1 ELSE 0 END) \"DEFAULT\",\n       SUM(CASE WHEN TRIM(degree) = '0' THEN 1 ELSE 0 END) \"0\",\n       SUM(CASE WHEN TRIM(degree) = '1' THEN 1 ELSE 0 END) \"1\",\n       SUM(CASE WHEN TRIM(degree) = '2' THEN 1 ELSE 0 END) \"2\",\n       SUM(CASE WHEN TRIM(degree) IN ('3', '4') THEN 1 ELSE 0 END) \"3-4\",\n       SUM(CASE WHEN TRIM(degree) IN ('5', '6', '7', '8') THEN 1 ELSE 0 END) \"5-8\",\n       SUM(CASE WHEN TRIM(degree) IN ('9', '10', '11', '12', '13', '14', '15', '16') THEN 1 ELSE 0 END) \"9-16\",\n       SUM(CASE WHEN LENGTH(TRIM(degree)) = 2 AND TRIM(degree) BETWEEN '17' AND '32' THEN 1 ELSE 0 END) \"17-32\",\n       SUM(CASE WHEN LENGTH(TRIM(degree)) = 2 AND TRIM(degree) BETWEEN '33' AND '64' THEN 1 ELSE 0 END) \"33-64\",\n       SUM(CASE WHEN (LENGTH(TRIM(degree)) = 2 AND TRIM(degree) BETWEEN '65' AND '99') OR\n                     (LENGTH(TRIM(degree)) = 3 AND TRIM(degree) BETWEEN '100' AND '128') THEN 1 ELSE 0 END) \"65-128\",\n       SUM(CASE WHEN LENGTH(TRIM(degree)) = 3 AND TRIM(degree) BETWEEN '129' AND '256' THEN 1 ELSE 0 END) \"129-256\",\n       SUM(CASE WHEN LENGTH(TRIM(degree)) = 3 AND TRIM(degree) BETWEEN '257' AND '512' THEN 1 ELSE 0 END) \"257-512\",\n       SUM(CASE WHEN (LENGTH(TRIM(degree)) = 3 AND TRIM(degree) > '512') OR\n                     (LENGTH(TRIM(degree)) > 3 AND TRIM(degree) != 'DEFAULT') THEN 1 ELSE 0 END) \"HIGHER\"\n  FROM dba_indexes\n WHERE owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n   AND index_type != 'LOB'\n GROUP BY\n       --con_id,\n       owner\nHAVING COUNT(*) > SUM(CASE WHEN TRIM(degree) IN ('0', '1') THEN 1 ELSE 0 END)\n)\nSELECT x.*\n       --,c.name con_name\n  FROM x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n       x.owner;",
+        "enabled": true
+      },
+      {
+        "name": "Database and Schema Triggers",
+        "description": "[5.4] Triggers de DATABASE/SCHEMA (logon, DDL etc.); trigger de logon lenta ou inválida afeta toda conexão.",
+        "sql": "SELECT x.*\n       --,c.name con_name\n  FROM dba_triggers x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE base_object_type IN ('DATABASE', 'SCHEMA')\n ORDER BY\n       x.base_object_type,\n       --x.con_id,\n       x.owner, x.trigger_name;",
+        "enabled": true
+      },
+      {
+        "name": "Libraries doing ALTER SESSION",
+        "description": "[5.4] Código PL/SQL contendo ALTER SESSION; sessões que mudam otimizador/NLS em runtime dificultam diagnóstico e criam planos divergentes.",
+        "sql": "SELECT x.*\n       --,c.name con_name\n  FROM dba_source x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE 'Y' = 'Y'\n   AND UPPER(x.text) LIKE '%ALTER%SESSION%'\n   AND UPPER(x.text) NOT LIKE '%--%ALTER%SESSION%'\n   AND x.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND x.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n ORDER BY\n       --x.con_id,\n       x.owner, x.name, x.type, x.line;",
+        "enabled": true
+      },
+      {
+        "name": "SQL using Literals (by count)",
+        "description": "[5.5] Assinaturas com 100+ cursores por uso de literais (gv$sql). Top N = candidatos a bind variables; risco: hard parse, pressão na shared pool, latch contention.",
+        "sql": "WITH\nlit AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2a.115 */\n       --con_id,\n       force_matching_signature, COUNT(*) cnt, MIN(sql_id) min_sql_id, MAX(sql_id) max_sql_id\n  FROM gv$sql\n WHERE force_matching_signature > 0\n   AND UPPER(sql_text) NOT LIKE '%EDB360%'\n GROUP BY\n       --con_id,\n       force_matching_signature\nHAVING COUNT(*) > 99\n)\nSELECT /*+  NO_MERGE  */ /* 2a.115 */\n       DISTINCT lit.cnt, s.force_matching_signature,\n       --s.con_id,\n       s.parsing_schema_name owner,\n       CASE WHEN o.object_name IS NOT NULL THEN o.object_name||'('||s.program_line#||')' END source,\n       lit.min_sql_id,\n       lit.max_sql_id,\n       s.sql_text\n\t   --,c.name con_name\n  FROM lit\n       --LEFT OUTER JOIN v$containers c ON c.con_id = lit.con_id\n      ,gv$sql s\n       LEFT OUTER JOIN dba_objects o\n                    ON o.object_id = s.program_id\n                    --AND o.con_id = s.con_id\n WHERE s.force_matching_signature = lit.force_matching_signature\n   AND s.sql_id = lit.min_sql_id\n   --AND s.con_id = lit.con_id\n ORDER BY\n       lit.cnt DESC,\n\t   --s.con_id,\n\t   s.force_matching_signature;",
+        "enabled": true
+      },
+      {
+        "name": "Top SQL by duplicates",
+        "description": "[5.5] Top 100 SQL duplicados por FORCE_MATCHING_SIGNATURE com gets/reads/tempo e % do total do cache. Cite os piores ofensores com números.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.125 */\n   FORCE_MATCHING_SIGNATURE,\n   duplicate_count,\n   min_sql_id,\n   max_sql_id,\n   executions,\n   buffer_gets,\n   buffer_gets_per_exec,\n   disk_reads,\n   disk_reads_per_exec,\n   rows_processed,\n   rows_processed_per_exec,\n   elapsed_seconds,\n   elapsed_seconds_per_exec,\n   pct_total_buffer_gets,\n   pct_total_disk_reads,\n   min_sql_text\n   --,c.name con_name\nfrom\n  (SELECT\n      --con_id,\n      FORCE_MATCHING_SIGNATURE,\n      count(*) duplicate_count,\n      min(sql_id) min_sql_id,\n      max(sql_id) max_sql_id,\n      sum(executions) executions,\n      sum(buffer_gets) buffer_gets,\n      ROUND(sum(buffer_gets)/greatest(sum(executions),1)) buffer_gets_per_exec,\n      sum(disk_reads) disk_reads,\n      ROUND(sum(disk_reads)/greatest(sum(executions),1)) disk_reads_per_exec,\n      sum(rows_processed) rows_processed,\n      ROUND(sum(rows_processed)/greatest(sum(executions),1)) rows_processed_per_exec,\n      round(sum(elapsed_time)/1000000, 3) elapsed_seconds,\n      ROUND(sum(elapsed_time)/1000000/greatest(sum(executions),1), 3) elapsed_seconds_per_exec,\n      ROUND(sum(buffer_gets)*100/(SELECT GREATEST(SUM(buffer_gets),1) FROM gv$sql), 1) pct_total_buffer_gets,\n      ROUND(sum(disk_reads)*100/(SELECT GREATEST(SUM(disk_reads),1) FROM gv$sql), 1) pct_total_disk_reads,\n      MIN(sql_text) min_sql_text,\n      rank() over (ORDER BY count(*) desc nulls last) AS sql_rank\n   from\n      gv$sql\n   WHERE\n      FORCE_MATCHING_SIGNATURE <> 0 AND\n      FORCE_MATCHING_SIGNATURE <> EXACT_MATCHING_SIGNATURE\n   group by\n      --con_id,\n\t  FORCE_MATCHING_SIGNATURE\n   ORDER BY\n      count(*) desc\n  ) v1\n  --LEFT OUTER JOIN v$containers c ON c.con_id = v1.con_id\nWHERE\n   sql_rank < 101;",
+        "enabled": true
+      },
+      {
+        "name": "Opened Cursors per Session",
+        "description": "[5.5] Cursores abertos por sessão (decrescente). Compare o topo com o parâmetro open_cursors; proximidade do limite = risco de ORA-01000.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.117 */\n       TO_NUMBER(a.value) opened_cursors_current,\n\t   --a.con_id,\n\t   a.inst_id,\n       s.sid, s.serial#,\n\t   s.username, s.machine, s.program, s.module, s.action\n\t   --,c.name con_name\n  FROM gv$sesstat a, gv$statname b, gv$session s\n       --LEFT OUTER JOIN v$containers c ON c.con_id = s.con_id\n WHERE a.statistic# = b.statistic#\n   AND a.inst_id = b.inst_id\n   AND s.sid=a.sid\n   AND s.inst_id = a.inst_id\n   AND b.name = 'opened cursors current'\n   AND TO_NUMBER(a.value) < 1.844E+19 -- bug\n   AND TO_NUMBER(a.value) > 0\nORDER BY 1 desc, 2, 3, 4;",
+        "enabled": true
+      },
+      {
+        "name": "Session Cursor Cache Misses",
+        "description": "[5.5] Sessões com misses no session cursor cache; muitos misses sugerem session_cached_cursors baixo para o perfil da aplicação.",
+        "sql": "WITH\nsession_cache AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2a.121 */\n       p.value - c.value session_cache_misses,\n       c.value session_cache_hits,\n       p.value total_parse_count,\n       --c.con_id,\n       c.inst_id,\n       c.sid\n  FROM gv$sesstat c,\n       gv$statname n1,\n       gv$sesstat p,\n       gv$statname n2\n WHERE n1.inst_id = c.inst_id\n   AND n1.statistic# = c.statistic#\n   AND n1.name = 'session cursor cache hits'\n   AND n2.inst_id = p.inst_id\n   AND n2.statistic# = p.statistic#\n   AND n2.name = 'parse count (total)'\n   AND p.inst_id = c.inst_id\n   AND p.sid = c.sid\n   --AND p.con_id = c.con_id\n)\nSELECT /*+  NO_MERGE  */ /* 2a.121 */\n       x.session_cache_misses,\n       x.session_cache_hits,\n       x.total_parse_count,\n       --x.con_id,\n       x.inst_id,\n       x.sid,\n       s.serial#,\n       s.username,\n       s.machine,\n       s.program,\n       s.module,\n       s.action\n\t   --,c.name con_name\n  FROM session_cache x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n      ,gv$session s\n WHERE x.session_cache_misses > 0\n   AND s.inst_id = x.inst_id\n   AND s.sid = x.sid\n ORDER BY\n       x.session_cache_misses DESC,\n       x.session_cache_hits, x.total_parse_count;",
+        "enabled": true
+      },
+      {
+        "name": "Cached Cursors List (sample)",
+        "description": "[5.5] Amostra de gv$open_cursor (resultado grande; o prompt mostra só as primeiras linhas). Apoio às consultas anteriores; não conclua a partir desta amostra isolada.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.120 */\n       x.*\n\t   --,c.name con_name\n  FROM gv$open_cursor x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n\t   x.inst_id, x.sid, x.sql_id\n       , x.sql_exec_id;",
+        "enabled": true
+      },
+      {
+        "name": "Invalid Objects",
+        "description": "[5.6] Objetos INVALID. Vazio = ok. Com linhas: agrupar por owner/tipo, explicar riscos (recompilação em runtime, efeito cascata) e recomendar recompilar ou dropar com aval do time da aplicação.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.62 */\n       x.*\n       --,c.name con_name\n  FROM dba_objects x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE x.status = 'INVALID'\n ORDER BY\n       --x.con_id,\n       x.owner,\n       x.object_name;",
+        "enabled": true
+      },
+      {
+        "name": "Disabled Constraints",
+        "description": "[5.6] Constraints DISABLED em schemas de aplicação: integridade não garantida e otimizador sem informação. Recomendar revisão com o time e reabilitação quando possível.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.63 */\n       x.*\n       --,c.name con_name\n  FROM dba_constraints x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE x.status = 'DISABLED'\n   AND NOT (x.owner = 'SYSTEM' AND x.constraint_name LIKE 'LOGMNR%')\n   AND x.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND x.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n ORDER BY\n       --x.con_id,\n       x.owner,\n       x.constraint_name;",
+        "enabled": true
+      },
+      {
+        "name": "Enabled NOT VALIDATED Constraints",
+        "description": "[5.6] Constraints ENABLED NOT VALIDATED: dados antigos podem violar a regra; validar quando viável.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.64 */\n       x.*\n       --,c.name con_name\n  FROM dba_constraints x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE x.status = 'ENABLED'\n   AND x.validated = 'NOT VALIDATED'\n   AND x.constraint_type != 'O'\n   AND NOT (x.owner = 'SYSTEM' AND x.constraint_name LIKE 'LOGMNR%')\n   AND x.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND x.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n ORDER BY\n       --x.con_id,\n       x.owner,\n       x.constraint_name;",
+        "enabled": true
+      },
+      {
+        "name": "Non-indexed FK Constraints",
+        "description": "[5.6] FKs sem índice: locks na tabela filha em update/delete do pai e joins ruins. Recomendar indexar as FKs de tabelas movimentadas.",
+        "sql": "WITH\nref_int_constraints AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2a.65 */\n       --col.con_id,\n       col.owner,\n       col.table_name,\n       col.constraint_name,\n       con.status,\n       con.r_owner,\n       con.r_constraint_name,\n       COUNT(*) col_cnt,\n       MAX(CASE col.position WHEN 01 THEN col.column_name END) col_01,\n       MAX(CASE col.position WHEN 02 THEN col.column_name END) col_02,\n       MAX(CASE col.position WHEN 03 THEN col.column_name END) col_03,\n       MAX(CASE col.position WHEN 04 THEN col.column_name END) col_04,\n       MAX(CASE col.position WHEN 05 THEN col.column_name END) col_05,\n       MAX(CASE col.position WHEN 06 THEN col.column_name END) col_06,\n       MAX(CASE col.position WHEN 07 THEN col.column_name END) col_07,\n       MAX(CASE col.position WHEN 08 THEN col.column_name END) col_08,\n       MAX(CASE col.position WHEN 09 THEN col.column_name END) col_09,\n       MAX(CASE col.position WHEN 10 THEN col.column_name END) col_10,\n       MAX(CASE col.position WHEN 11 THEN col.column_name END) col_11,\n       MAX(CASE col.position WHEN 12 THEN col.column_name END) col_12,\n       MAX(CASE col.position WHEN 13 THEN col.column_name END) col_13,\n       MAX(CASE col.position WHEN 14 THEN col.column_name END) col_14,\n       MAX(CASE col.position WHEN 15 THEN col.column_name END) col_15,\n       MAX(CASE col.position WHEN 16 THEN col.column_name END) col_16,\n       par.owner parent_owner,\n       par.table_name parent_table_name,\n       par.constraint_name parent_constraint_name\n  FROM dba_constraints  con,\n       dba_cons_columns col,\n       dba_constraints  par\n WHERE con.constraint_type = 'R'\n   AND con.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND con.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n   --AND col.con_id = con.con_id\n   AND col.owner = con.owner\n   AND col.constraint_name = con.constraint_name\n   AND col.table_name = con.table_name\n   --AND par.con_id(+) = con.con_id\n   AND par.owner(+) = con.r_owner\n   AND par.constraint_name(+) = con.r_constraint_name\n GROUP BY\n       --col.con_id,\n       col.owner,\n       col.constraint_name,\n       col.table_name,\n       con.status,\n       con.r_owner,\n       con.r_constraint_name,\n       par.owner,\n       par.constraint_name,\n       par.table_name\n),\nref_int_indexes AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2a.65 */\n       --r.con_id,\n       r.owner,\n       r.constraint_name,\n       c.table_owner,\n       c.table_name,\n       c.index_owner,\n       c.index_name,\n       r.col_cnt\n  FROM ref_int_constraints r,\n       dba_ind_columns c,\n       dba_indexes i\n WHERE c.table_owner = r.owner\n   AND c.table_name = r.table_name\n   --AND c.con_id = r.con_id\n   AND c.column_position <= r.col_cnt\n   AND c.column_name IN (r.col_01, r.col_02, r.col_03, r.col_04, r.col_05, r.col_06, r.col_07, r.col_08,\n                         r.col_09, r.col_10, r.col_11, r.col_12, r.col_13, r.col_14, r.col_15, r.col_16)\n   --AND i.con_id = c.con_id\n   AND i.owner = c.index_owner\n   AND i.index_name = c.index_name\n   AND i.table_owner = c.table_owner\n   AND i.table_name = c.table_name\n   AND i.index_type != 'BITMAP'\n GROUP BY\n       --r.con_id,\n       r.owner,\n       r.constraint_name,\n       c.table_owner,\n       c.table_name,\n       c.index_owner,\n       c.index_name,\n       r.col_cnt\nHAVING COUNT(*) = r.col_cnt\n)\nSELECT /*+  NO_MERGE  */ /* 2a.65 */\n       x.*\n       --,c.name con_name\n  FROM ref_int_constraints x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE NOT EXISTS (\nSELECT NULL\n  FROM ref_int_indexes i\n WHERE i.owner = x.owner\n   --AND i.con_id = x.con_id\n   AND i.constraint_name = x.constraint_name)\n ORDER BY\n       1, 2, 3\n       --, x.con_id;",
+        "enabled": true
+      },
+      {
+        "name": "Redundant Indexes",
+        "description": "[5.6] Índices cujo conjunto de colunas é prefixo de outro índice: custo extra em todo DML sem benefício. Recomendar avaliação de remoção (tornar INVISIBLE antes, monitorar, depois drop) com aval do fornecedor da aplicação.",
+        "sql": "WITH\nindexed_columns AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2a.75 */\n       --col.con_id,\n       col.index_owner,\n       col.index_name,\n       col.table_owner,\n       col.table_name,\n       idx.index_type,\n       idx.uniqueness,\n       MAX(CASE col.column_position WHEN 01 THEN      col.column_name END)||\n       MAX(CASE col.column_position WHEN 02 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 03 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 04 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 05 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 06 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 07 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 08 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 09 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 10 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 11 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 12 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 13 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 14 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 15 THEN ':'||col.column_name END)||\n       MAX(CASE col.column_position WHEN 16 THEN ':'||col.column_name END)\n       indexed_columns\n  FROM dba_ind_columns col,\n       dba_indexes idx\n WHERE col.table_owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND col.table_owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n   --AND idx.con_id = col.con_id\n   AND idx.owner = col.index_owner\n   AND idx.index_name = col.index_name\n GROUP BY\n       --col.con_id,\n       col.index_owner,\n       col.index_name,\n       col.table_owner,\n       col.table_name,\n       idx.index_type,\n       idx.uniqueness\n)\nSELECT /*+  NO_MERGE  */ /* 2a.75 */\n       --r.con_id,\n       r.table_owner,\n       r.table_name,\n       r.index_type,\n       r.index_name||' ('||r.indexed_columns||')' redundant_index,\n       i.index_name||' ('||i.indexed_columns||')' superset_index\n       --,c.name con_name\n  FROM indexed_columns r,\n       indexed_columns i\n       --LEFT OUTER JOIN v$containers c ON c.con_id = i.con_id\n WHERE i.table_owner = r.table_owner\n   --AND i.con_id = r.con_id\n   AND i.table_name = r.table_name\n   AND i.index_type = r.index_type\n   AND i.index_name != r.index_name\n   AND i.indexed_columns LIKE r.indexed_columns||':%'\n   AND r.uniqueness = 'NONUNIQUE'\n ORDER BY\n       --r.con_id,\n       r.table_owner,\n       r.table_name,\n       r.index_name,\n       i.index_name;",
+        "enabled": true
+      },
+      {
+        "name": "Unusable Indexes",
+        "description": "[5.6] Índices/partições UNUSABLE: ignorados pelo otimizador e podem quebrar DML. Rebuild ou drop.",
+        "sql": "WITH x as (\nSELECT /*+  NO_MERGE  */ /* 2a.66 */\n       --con_id,\n       index_owner,index_name, 'SUBPARTITIONED' INDEX_TYPE ,partition_name,subpartition_name\n  FROM dba_ind_subpartitions\n WHERE status = 'UNUSABLE'\n   AND index_owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND index_owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\nUNION ALL\nSELECT --con_id,\n       index_owner,index_name,'PARTITIONED',partition_name,null\n  FROM dba_ind_partitions\n WHERE status = 'UNUSABLE'\n   AND index_owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND index_owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\nUNION ALL\nSELECT --con_id,\n       owner,index_name,index_type,null,null\n  FROM dba_indexes\n WHERE status = 'UNUSABLE'\n   AND owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n )\nSELECT x.*\n       --,c.name con_name\n  FROM x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n       x.index_owner, x.index_name, x.partition_name nulls first, x.subpartition_name nulls first;",
+        "enabled": true
+      },
+      {
+        "name": "Invisible Indexes",
+        "description": "[5.6] Índices INVISIBLE: mantidos (custo de DML) mas não usados pelo otimizador; decidir destino.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.67 */\n       x.*\n       --,c.name con_name\n  FROM dba_indexes x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE x.visibility = 'INVISIBLE'\n   AND x.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND x.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n ORDER BY\n       --x.con_id,\n       x.owner,\n       x.index_name;",
+        "enabled": true
+      },
+      {
+        "name": "Function-Based Indexes",
+        "description": "[5.6] Inventário de índices function-based; atenção a DISABLED/UNUSABLE por alteração da função.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.68 */\n       x.*\n       --,c.name con_name\n  FROM dba_indexes x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE x.index_type LIKE 'FUNCTION-BASED%'\n   AND x.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND x.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n ORDER BY\n       --x.con_id,\n       x.owner,\n       x.index_name;",
+        "enabled": true
+      },
+      {
+        "name": "Partition Key not in Index",
+        "description": "[5.6] Índices particionados sem a coluna da chave de particionamento entre as colunas do índice; conferir se o pruning esperado acontece.",
+        "sql": "WITH k as (\nSELECT k.*, 'Partition' part_level\nFROM   dba_part_key_columns k\nunion all\nSELECT k.*, 'Subpartition'\nFROM   dba_subpart_key_columns k\n)\nSELECT /*+  NO_MERGE  */ /* 2a.85 */\n       --i.con_id,\n       i.table_owner, i.table_name\n,      i.owner index_owner\n,      i.index_name\n,      i.index_type\n,      'Partition' part_level\n,      pi.locality\n,      pi.partitioning_type\n,      pi.partition_count\n,      k.column_position part_column_position\n,      k.column_name part_column_name\n,\t  (SELECT LISTAGG(NVL(ie.extension,ic.column_name),',') WITHIN GROUP (ORDER BY ic.column_position)\n       FROM\t  dba_ind_columns ic\n       LEFT OUTER JOIN dba_stat_extensions ie\n       ON    ie.owner = ic.table_owner\n       --AND  ie.con_id = ic.con_id\n       AND   ie.table_name = ic.table_name\n       AND   ie.extension_name = ic.column_name\n       WHERE i.owner = ic.index_owner\n       --AND   i.con_id = ic.con_id\n       AND \t i.index_name = ic.index_name\n       AND\t i.table_owner = ic.table_owner\n       AND\t i.table_name = ic.table_name\n       ) column_list\n       --,c.name con_name\nFROM   dba_indexes i\n,      dba_part_indexes pi\n,      k\n       --LEFT OUTER JOIN v$containers c ON c.con_id = k.con_id\nWHERE  i.table_owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\nAND    i.table_owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\nAND    i.index_type NOT IN('LOB')\n--AND    k.con_id = i.con_id\nAND    k.owner = i.owner\nAND    k.name = i.index_name\nAND    k.object_type = 'INDEX'\nAND    i.partitioned = 'YES'\n--AND    pi.con_id = i.con_id\nAND    pi.owner = i.owner\nAND    pi.index_name = i.index_name\nAND    pi.table_name = i.table_name\nAND    not exists (\n\tSELECT  'x'\n\tFROM \tdba_ind_columns ic\n\tWHERE\tic.index_owner = i.owner\n\t--AND     ic.con_id      = i.con_id\n\tAND \tic.index_name  = i.index_name\n\tAND     ic.table_owner = i.table_owner\n\tAND     ic.table_name  = i.table_name\n\tAND     ic.column_name = k.column_name)\nORDER BY\n       --i.con_id,\n       i.table_owner, i.table_name\n,      i.owner\n,      i.index_name\n,      i.index_type;",
+        "enabled": true
+      },
+      {
+        "name": "Subpartitions with Compression",
+        "description": "[5.6] Subpartições com compressão habilitada (inventário). COMPRESS FOR OLTP/ADVANCED exige licença Advanced Compression — cruzar com a seção 4.",
+        "sql": "WITH x AS (\nSELECT /*+  NO_MERGE  */ /* 2a.86 */\n       --con_id,\n       table_owner,\n       table_name,\n       compress_for,\n       COUNT(*),\n       MIN(subpartition_position) min_part_pos,\n       MAX(subpartition_position) max_part_pos\n  FROM dba_tab_subpartitions\n WHERE table_owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND table_owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n   AND compression = 'ENABLED'\n GROUP BY\n       --con_id,\n       table_owner,\n       table_name,\n       compress_for\n)\nSELECT x.*\n       --,c.name con_name\nFROM   x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n       x.table_owner,\n       x.table_name,\n       x.compress_for;",
+        "enabled": true
+      },
+      {
+        "name": "Orphaned Synonyms",
+        "description": "[5.6] Sinônimos apontando para objetos inexistentes; recomendar remoção se o objeto de origem não voltará.",
+        "sql": "WITH x AS (\nSELECT /*+  NO_MERGE  */ /* 2a.131 */\n       --s.con_id,\n       s.owner, s.table_owner, COUNT(1) counter\n  FROM dba_synonyms s\n WHERE NOT EXISTS\n       (SELECT NULL\n          FROM dba_objects o\n         WHERE o.object_name = s.table_name\n\t       --AND o.con_id = s.con_id\n           AND o.owner = s.table_owner)\n   AND s.db_link IS NULL\n   AND s.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND s.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n   AND s.table_owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND s.table_owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n GROUP BY\n       --s.con_id,\n       s.owner, s.table_owner\n)\n SELECT x.*\n       --,c.name con_name\n  FROM x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\nORDER BY\n       x.counter DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Sequences over 80%",
+        "description": "[5.6] Sequences acima de 80% do MAXVALUE: risco de ORA-08004 e parada da aplicação; recomendar aumentar MAXVALUE ou avaliar CYCLE.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.112 */\n       ROUND(100 * (s.last_number - s.min_value) / GREATEST((s.max_value - s.min_value), 1), 1) percent_used, /* requested by Mike Moehlman */\n       s.*\n       --,c.name con_name\n  FROM dba_sequences s\n       --LEFT OUTER JOIN v$containers c ON c.con_id = s.con_id\n WHERE s.sequence_owner not in ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND s.sequence_owner not in ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n   AND s.max_value > 0\n   AND ROUND(100 * (s.last_number - s.min_value) / GREATEST((s.max_value - s.min_value), 1), 1) > 80\nORDER BY\n       ROUND(100 * (s.last_number - s.min_value) / GREATEST((s.max_value - s.min_value), 1), 1) DESC, /* requested by Mike Moehlman */\n       --s.con_id,\ns.sequence_owner, s.sequence_name;",
+        "enabled": true
+      },
+      {
+        "name": "Scheduler Jobs",
+        "description": "[5.6] Jobs do scheduler (inventário). Jobs BROKEN/desabilitados inesperadamente são achado.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.98 */\n       x.*\n       --,c.name con_name\n  FROM dba_scheduler_jobs x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n       x.owner,\n       x.job_name;",
+        "enabled": true
+      },
+      {
+        "name": "Scheduler Job Log (7 days)",
+        "description": "[5.6] Execuções de jobs nos últimos 7 dias; FAILED/erros recorrentes são achado.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.99 */\n       x.*\n       --,c.name con_name\n  FROM dba_scheduler_job_log x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE x.log_date > SYSDATE - 7\n ORDER BY\n       --x.con_id,\n       x.log_id DESC,\n       x.log_date DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Auto Task Job History",
+        "description": "[5.6] Histórico das auto tasks (stats, space advisor, sql tuning). Falhas ou janelas estouradas = achado (afeta diretamente a coleta de estatísticas).",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.109 */\n       x.client_name,\n       x.window_name,\n       CAST(x.window_start_time AS TIMESTAMP) window_start_time,\n       TO_CHAR(x.window_duration) window_duration,\n       x.job_status,\n       CAST(x.job_start_time AS TIMESTAMP) job_start_time,\n       TO_CHAR(x.job_duration) job_duration,\n       x.job_error,\n       x.job_info\n  FROM dba_autotask_job_history x\n ORDER BY\n       x.window_start_time DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Advisor Parameters",
+        "description": "[5.6] Parâmetros das tasks de advisor. Informativo.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2a.102 */\n       x.*\n       --,c.name con_name\n  FROM dba_advisor_parameters x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\nORDER BY\n       --x.con_id,\n       x.owner, x.task_id;",
+        "enabled": true
+      },
+      {
+        "name": "Database Size on Disk",
+        "description": "[5.7] Tamanho em disco por tipo de arquivo (data/temp/log/control) e total.",
+        "sql": "WITH\nsizes AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 1e.58 */\n       'Data' file_type,\n       SUM(bytes) bytes\n  FROM v$datafile\n UNION ALL\nSELECT 'Temp' file_type,\n       SUM(bytes) bytes\n  FROM v$tempfile\n UNION ALL\nSELECT 'Log' file_type,\n       SUM(bytes) * MAX(members) bytes\n  FROM v$log\n UNION ALL\nSELECT 'Control' file_type,\n       SUM(block_size * file_size_blks) bytes\n  FROM v$controlfile\n),\ndbsize AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 1e.58 */\n       'Total' file_type,\n       SUM(bytes) bytes\n  FROM sizes\n)\nSELECT d.dbid,\n       d.name db_name,\n       s.file_type,\n       s.bytes,\n       ROUND(s.bytes/POWER(10,9),3) gb,\n       CASE\n       WHEN s.bytes > POWER(10,15) THEN ROUND(s.bytes/POWER(10,15),3)||' P'\n       WHEN s.bytes > POWER(10,12) THEN ROUND(s.bytes/POWER(10,12),3)||' T'\n       WHEN s.bytes > POWER(10,9) THEN ROUND(s.bytes/POWER(10,9),3)||' G'\n       WHEN s.bytes > POWER(10,6) THEN ROUND(s.bytes/POWER(10,6),3)||' M'\n       WHEN s.bytes > POWER(10,3) THEN ROUND(s.bytes/POWER(10,3),3)||' K'\n       WHEN s.bytes > 0 THEN s.bytes||' B' END display\n  FROM v$database d,\n       sizes s\n UNION ALL\nSELECT d.dbid,\n       d.name db_name,\n       s.file_type,\n       s.bytes,\n       ROUND(s.bytes/POWER(10,9),3) gb,\n       CASE\n       WHEN s.bytes > POWER(10,15) THEN ROUND(s.bytes/POWER(10,15),3)||' P'\n       WHEN s.bytes > POWER(10,12) THEN ROUND(s.bytes/POWER(10,12),3)||' T'\n       WHEN s.bytes > POWER(10,9) THEN ROUND(s.bytes/POWER(10,9),3)||' G'\n       WHEN s.bytes > POWER(10,6) THEN ROUND(s.bytes/POWER(10,6),3)||' M'\n       WHEN s.bytes > POWER(10,3) THEN ROUND(s.bytes/POWER(10,3),3)||' K'\n       WHEN s.bytes > 0 THEN s.bytes||' B' END display\n  FROM v$database d,\n       dbsize s;",
+        "enabled": true
+      },
+      {
+        "name": "Tablespace Usage",
+        "description": "[5.7] Uso por tablespace considerando MAXSIZE (autoextend). Uso alto do máximo possível = achado com urgência proporcional; ignorar % alto quando ainda há muito espaço de autoextend.",
+        "sql": "WITH\nfiles AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.141 */\n       --con_id,\n       tablespace_name,\n       SUM(DECODE(autoextensible, 'YES', maxbytes, bytes)) / POWER(10,9) Max_size_gb,\n       SUM( bytes) / POWER(10,9) Size_gb\n  FROM dba_data_files\n GROUP BY\n       --con_id,\n       tablespace_name\n),\nsegments AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.141 */\n       --con_id,\n\t   tablespace_name,\n       SUM(bytes) / POWER(10,9) used_gb\n  FROM dba_segments\n WHERE 'Y' = 'Y'\n GROUP BY\n       --con_id,\n       tablespace_name\n),\ntablespaces AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.141 */\n       --files.con_id,\n       files.tablespace_name,\n       ROUND(files.size_gb, 1) size_gb,\n       ROUND(segments.used_gb, 1) used_gb,\n       ROUND(100 * segments.used_gb / files.size_gb, 1) pct_used,\n       ROUND(files.max_size_gb, 1) max_size_gb\n  FROM files,\n       segments\n WHERE files.size_gb > 0\n   AND files.tablespace_name = segments.tablespace_name(+)\n   --AND files.con_id = segments.con_id(+)\n ORDER BY\n       --files.con_id,\n       files.tablespace_name\n),\ntotal AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.141 */\n       'Total' tablespace_name,\n       SUM(size_gb) size_gb,\n       SUM(used_gb) used_gb,\n       ROUND(100 * SUM(used_gb) / SUM(size_gb), 1) pct_used,\n       sum(max_size_gb) max_size_gb\n  FROM tablespaces\n)\nSELECT --con_id,\n       tablespace_name,\n       size_gb,\n       used_gb,\n       pct_used,\n       max_size_gb\n  FROM tablespaces\n UNION ALL\nSELECT --NULL,\n       tablespace_name,\n       size_gb,\n       used_gb,\n       pct_used,\n       max_size_gb\n  FROM total;",
+        "enabled": true
+      },
+      {
+        "name": "Data Files Usage",
+        "description": "[5.7] Alocado/usado/livre por tablespace com contagem de datafiles.",
+        "sql": "WITH alloc AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.146 */\n       --con_id,\n       tablespace_name,\n       COUNT(*) datafiles,\n       ROUND(SUM(bytes)/POWER(10,9)) gb\n  FROM dba_data_files\n GROUP BY\n       --con_id,\n       tablespace_name\n),free AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.146 */\n       --con_id,\n\t   tablespace_name,\n       ROUND(SUM(bytes)/POWER(10,9)) gb\n  FROM dba_free_space\n GROUP BY\n       --con_id,\n       tablespace_name\n),tablespaces AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.146 */\n       --a.con_id,\n       a.tablespace_name,\n       a.datafiles,\n       a.gb alloc_gb,\n       (a.gb - f.gb) used_gb,\n       f.gb free_gb\n  FROM alloc a, free f\n WHERE a.tablespace_name = f.tablespace_name\n   --AND a.con_id = f.con_id\n ORDER BY\n       --a.con_id,\n       a.tablespace_name\n--),pdb_total AS (\n--SELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.146 */\n--       con_id,\n--\t     SUM(alloc_gb) alloc_gb,\n--       SUM(used_gb) used_gb,\n--       SUM(free_gb) free_gb\n--  FROM tablespaces\n-- GROUP BY con_id\n),total AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.146 */\n       SUM(alloc_gb) alloc_gb,\n       SUM(used_gb) used_gb,\n       SUM(free_gb) free_gb\n  FROM tablespaces\n), v as (\nSELECT --con_id,\n       tablespace_name,\n       datafiles,\n       alloc_gb,\n       used_gb,\n       free_gb\n  FROM tablespaces\n-- UNION ALL\n--SELECT con_id,\n--       'PDB Total' tablespace_name,\n--       TO_NUMBER(NULL) datafiles,\n--       alloc_gb,\n--       used_gb,\n--       free_gb\n--  FROM pdb_total\n UNION ALL\nSELECT --NULL,\n       'Total' tablespace_name,\n       TO_NUMBER(NULL) datafiles,\n       alloc_gb,\n       used_gb,\n       free_gb\n  FROM total\n)\nSELECT --v.con_id,\n       v.tablespace_name,\n       v.datafiles,\n       v.alloc_gb,\n       v.used_gb,\n       CASE WHEN v.alloc_gb > 0 THEN\n       LPAD(TRIM(TO_CHAR(ROUND(100 * v.used_gb / v.alloc_gb, 1), '990.0')), 8)\n       END pct_used,\n       v.free_gb,\n       CASE WHEN v.alloc_gb > 0 THEN\n       LPAD(TRIM(TO_CHAR(ROUND(100 * v.free_gb / v.alloc_gb, 1), '990.0')), 8)\n       END pct_free\n\t   --,c.name con_name\n  FROM v\n       --LEFT OUTER JOIN v$containers c ON c.con_id = v.con_id;",
+        "enabled": true
+      },
+      {
+        "name": "Temporary Tablespace per User",
+        "description": "[5.7] Distribuição de usuários por temporary tablespace; concentração anormal ou temp errada = achado (ver também 5.9).",
+        "sql": "WITH x as (\nSELECT /*+  NO_MERGE  */ /* 2b.139 */\n       --con_id,\n\t   temporary_tablespace, COUNT(*) number_of_users\n  FROM dba_users\n GROUP BY\n       --con_id,\n\t   temporary_tablespace\n)\nSELECT x.*\n       --,c.name con_name\n FROM  x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n       temporary_tablespace;",
+        "enabled": true
+      },
+      {
+        "name": "Database Growth per Month",
+        "description": "[5.7] Crescimento aproximado por mês (data de criação dos datafiles). Estime a tendência e o horizonte de espaço.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2b.154 */\n       TO_CHAR(creation_time, 'YYYY-MM') creation_month,\n       ROUND(SUM(bytes)/POWER(10,6)) mb_growth,\n       ROUND(SUM(bytes)/POWER(10,9)) gb_growth,\n       ROUND(SUM(bytes)/POWER(10,12), 1) tb_growth\n  FROM v$datafile\n GROUP BY\n       TO_CHAR(creation_time, 'YYYY-MM')\n ORDER BY 1;",
+        "enabled": true
+      },
+      {
+        "name": "Largest 200 Objects",
+        "description": "[5.7] Top 200 segmentos com % acumulado. Cite os maiores e o grau de concentração (ex.: top 20 = X% do banco).",
+        "sql": "WITH schema_object AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.155 */\n       --con_id,\n       segment_type,\n       owner,\n       segment_name,\n       tablespace_name,\n       COUNT(*) segments,\n       SUM(extents) extents,\n       SUM(blocks) blocks,\n       SUM(bytes) bytes\n  FROM dba_segments\n WHERE 'Y' = 'Y'\n GROUP BY\n       --con_id,\n       segment_type,\n       owner,\n       segment_name,\n       tablespace_name\n), totals AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.155 */\n       SUM(segments) segments,\n       SUM(extents) extents,\n       SUM(blocks) blocks,\n       SUM(bytes) bytes\n  FROM schema_object\n), top_200_pre AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.155 */\n       ROWNUM rank, v1.*\n       FROM (\nSELECT --so.con_id,\n       so.segment_type,\n       so.owner,\n       so.segment_name,\n       so.tablespace_name,\n       so.segments,\n       so.extents,\n       so.blocks,\n       so.bytes,\n       ROUND((so.segments / t.segments) * 100, 3) segments_perc,\n       ROUND((so.extents / t.extents) * 100, 3) extents_perc,\n       ROUND((so.blocks / t.blocks) * 100, 3) blocks_perc,\n       ROUND((so.bytes / t.bytes) * 100, 3) bytes_perc\n  FROM schema_object so,\n       totals t\n ORDER BY\n       bytes_perc DESC NULLS LAST\n) v1\n WHERE ROWNUM < 201\n), top_200 AS (\nSELECT p.*,\n       (SELECT object_id\n          FROM dba_objects o\n         WHERE o.object_type = p.segment_type\n\t\t   --AND o.con_id = p.con_id\n           AND o.owner = p.owner\n           AND o.object_name = p.segment_name\n           AND o.object_type NOT LIKE '%PARTITION%') object_id,\n       (SELECT data_object_id\n          FROM dba_objects o\n         WHERE o.object_type = p.segment_type\n           --AND o.con_id = p.con_id\n           AND o.owner = p.owner\n           AND o.object_name = p.segment_name\n           AND o.object_type NOT LIKE '%PARTITION%') data_object_id,\n       (SELECT SUM(p2.bytes_perc) FROM top_200_pre p2 WHERE p2.rank <= p.rank) bytes_perc_cum\n  FROM top_200_pre p\n), top_200_totals AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.155 */\n       SUM(segments) segments,\n       SUM(extents) extents,\n       SUM(blocks) blocks,\n       SUM(bytes) bytes,\n       SUM(segments_perc) segments_perc,\n       SUM(extents_perc) extents_perc,\n       SUM(blocks_perc) blocks_perc,\n       SUM(bytes_perc) bytes_perc\n  FROM top_200\n), top_100_totals AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.155 */\n       SUM(segments) segments,\n       SUM(extents) extents,\n       SUM(blocks) blocks,\n       SUM(bytes) bytes,\n       SUM(segments_perc) segments_perc,\n       SUM(extents_perc) extents_perc,\n       SUM(blocks_perc) blocks_perc,\n       SUM(bytes_perc) bytes_perc\n  FROM top_200\n WHERE rank < 101\n), top_20_totals AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2b.155 */\n       SUM(segments) segments,\n       SUM(extents) extents,\n       SUM(blocks) blocks,\n       SUM(bytes) bytes,\n       SUM(segments_perc) segments_perc,\n       SUM(extents_perc) extents_perc,\n       SUM(blocks_perc) blocks_perc,\n       SUM(bytes_perc) bytes_perc\n  FROM top_200\n WHERE rank < 21\n)\nSELECT v.rank,\n       v.segment_type,\n\t   --v.con_id,\n       v.owner,\n       v.segment_name,\n       v.object_id,\n       v.data_object_id,\n       v.tablespace_name,\n       CASE\n       WHEN v.segment_type LIKE 'INDEX%' THEN\n         (SELECT i.table_name\n            FROM dba_indexes i\n           WHERE i.owner = v.owner\n\t\t     --AND i.con_id = v.con_id\n\t\t     AND i.index_name = v.segment_name)\n       WHEN v.segment_type LIKE 'LOB%' THEN\n         (SELECT l.table_name\n            FROM dba_lobs l\n           WHERE l.owner = v.owner\n\t\t     --AND l.con_id = v.con_id\n\t\t     AND l.segment_name = v.segment_name)\n       END table_name,\n       v.segments,\n       v.extents,\n       v.blocks,\n       v.bytes,\n       ROUND(v.bytes / POWER(10,9), 3) gb,\n       LPAD(TO_CHAR(v.segments_perc, '990.000'), 7) segments_perc,\n       LPAD(TO_CHAR(v.extents_perc, '990.000'), 7) extents_perc,\n       LPAD(TO_CHAR(v.blocks_perc, '990.000'), 7) blocks_perc,\n       LPAD(TO_CHAR(v.bytes_perc, '990.000'), 7) bytes_perc,\n       LPAD(TO_CHAR(v.bytes_perc_cum, '990.000'), 7) perc_cum\n\t   --,c.name con_name\n  FROM (\nSELECT d.rank,\n       d.segment_type,\n\t   --d.con_id,\n       d.owner,\n       d.segment_name,\n       d.object_id,\n       d.data_object_id,\n       d.tablespace_name,\n       d.segments,\n       d.extents,\n       d.blocks,\n       d.bytes,\n       d.segments_perc,\n       d.extents_perc,\n       d.blocks_perc,\n       d.bytes_perc,\n       d.bytes_perc_cum\n  FROM top_200 d\n UNION ALL\nSELECT TO_NUMBER(NULL) rank,\n       NULL segment_type,\n\t   --NULL con_id,\n       NULL owner,\n       NULL segment_name,\n       TO_NUMBER(NULL),\n       TO_NUMBER(NULL),\n       'TOP  20' tablespace_name,\n       st.segments,\n       st.extents,\n       st.blocks,\n       st.bytes,\n       st.segments_perc,\n       st.extents_perc,\n       st.blocks_perc,\n       st.bytes_perc,\n       TO_NUMBER(NULL) bytes_perc_cum\n  FROM top_20_totals st\n UNION ALL\nSELECT TO_NUMBER(NULL) rank,\n       NULL segment_type,\n\t   --NULL con_id,\n       NULL owner,\n       NULL segment_name,\n       TO_NUMBER(NULL),\n       TO_NUMBER(NULL),\n       'TOP 100' tablespace_name,\n       st.segments,\n       st.extents,\n       st.blocks,\n       st.bytes,\n       st.segments_perc,\n       st.extents_perc,\n       st.blocks_perc,\n       st.bytes_perc,\n       TO_NUMBER(NULL) bytes_perc_cum\n  FROM top_100_totals st\n UNION ALL\nSELECT TO_NUMBER(NULL) rank,\n       NULL segment_type,\n\t   --NULL con_id,\n       NULL owner,\n       NULL segment_name,\n       TO_NUMBER(NULL),\n       TO_NUMBER(NULL),\n       'TOP 200' tablespace_name,\n       st.segments,\n       st.extents,\n       st.blocks,\n       st.bytes,\n       st.segments_perc,\n       st.extents_perc,\n       st.blocks_perc,\n       st.bytes_perc,\n       TO_NUMBER(NULL) bytes_perc_cum\n  FROM top_200_totals st\n UNION ALL\nSELECT TO_NUMBER(NULL) rank,\n       NULL segment_type,\n\t   --NULL con_id,\n       NULL owner,\n       NULL segment_name,\n       TO_NUMBER(NULL),\n       TO_NUMBER(NULL),\n       'TOTAL' tablespace_name,\n       t.segments,\n       t.extents,\n       t.blocks,\n       t.bytes,\n       100 segemnts_perc,\n       100 extents_perc,\n       100 blocks_perc,\n       100 bytes_perc,\n       TO_NUMBER(NULL) bytes_perc_cum\n  FROM totals t) v\n  --LEFT OUTER JOIN v$containers c ON c.con_id = v.con_id;",
+        "enabled": true
+      },
+      {
+        "name": "SYSAUX Occupants",
+        "description": "[5.7] Ocupantes do SYSAUX; ocupante anormalmente grande (ex.: SM/OPTSTAT) = achado com ação de purge/retensão.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2b.153 */\n       v.*, ROUND(v.space_usage_kbytes / POWER(10,6), 3) space_usage_gbs\n  FROM v$sysaux_occupants v\n ORDER BY 1;",
+        "enabled": true
+      },
+      {
+        "name": "Segment Shrink Recommendations",
+        "description": "[5.7] Recomendações do Segment Advisor (espaço recuperável); liste o top por reclaimable_space. Pode falhar sem EXECUTE em DBMS_SPACE.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2b.164 */\n       *\nFROM TABLE(dbms_space.asa_recommendations())\nWhere segment_owner not in ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS') and\n   segment_owner not in ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\norder by reclaimable_space desc;",
+        "enabled": true
+      },
+      {
+        "name": "Objects in Recycle Bin",
+        "description": "[5.7] Objetos na recycle bin retendo espaço; purge se necessário. Se vazio E recyclebin=OFF nos parâmetros, apontar em 5.2 a recomendação de habilitar.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2b.165 */\n       x.*\n\t   --,c.name con_name\n  FROM dba_recyclebin x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE x.owner NOT IN ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   AND x.owner NOT IN ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n ORDER BY\n       --x.con_id,\n\t   x.owner,\n       x.object_name;",
+        "enabled": true
+      },
+      {
+        "name": "IO Statistics for DB Files",
+        "description": "[5.7] I/O por arquivo (v$iostat_file): latência média de single block por arquivo; sustentado acima de ~10-20 ms em datafile quente = achado de storage.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2b.149 */\n       x.*\n\t   --,c.name con_name\n  FROM v$iostat_file x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       1;",
+        "enabled": true
+      },
+      {
+        "name": "IO Outliers",
+        "description": "[5.7] I/Os acima de 500 ms (v$io_outlier). Vazio = ok; presença recorrente = achado de storage.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2b.152 */\n       *\n  FROM v$io_outlier\n ORDER BY\n       1;",
+        "enabled": true
+      },
+      {
+        "name": "Kernel IO Outliers",
+        "description": "[5.7] Outliers de I/O na camada de kernel (v$kernel_io_outlier). Vazio = ok.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2b.150 */\n       *\n  FROM v$kernel_io_outlier\n ORDER BY\n       1;",
+        "enabled": true
+      },
+      {
+        "name": "Log Writer IO Outliers",
+        "description": "[5.7] Outliers de I/O do LGWR (v$lgwrio_outlier): afetam diretamente a latência de commit. Vazio = ok.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2b.151 */\n       *\n  FROM v$lgwrio_outlier\n ORDER BY\n       1;",
+        "enabled": true
+      },
+      {
+        "name": "Database Role & Protection",
+        "description": "[5.8] Role (PRIMARY/STANDBY), log_mode, flashback, modo de proteção. NOARCHIVELOG em produção = achado crítico.",
+        "sql": "SELECT database_role role, name, db_unique_name, platform_id, open_mode, log_mode, flashback_on, protection_mode, protection_level /* 2e.206 */\nFROM v$database;",
+        "enabled": true
+      },
+      {
+        "name": "Force Logging",
+        "description": "[5.8] force_logging e supplemental logging. Com standby/replicação, force_logging NO = achado crítico (operações NOLOGGING corrompem o standby).",
+        "sql": "SELECT force_logging, remote_archive, supplemental_log_data_pk, supplemental_log_data_ui, switchover_status, dataguard_broker /* 2e.207 */\nFROM v$database;",
+        "enabled": true
+      },
+      {
+        "name": "RMAN Backup Jobs",
+        "description": "[5.8] Jobs RMAN registrados no controlfile. VAZIO = NENHUM backup conhecido pelo banco — achado crítico (ou backup por fora; pedir confirmação). FAILED recentes = achado; comente janela, duração e recomendação de testar restore periodicamente.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2d.187 */\n       *\n  FROM v$rman_backup_job_details\n --WHERE start_time >= (SYSDATE - 100)\n ORDER BY\n       start_time DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Block Corruption",
+        "description": "[5.8] v$database_block_corruption. Vazio = ok; QUALQUER linha = achado crítico com ação imediata.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2d.183 */\n       *\n  FROM v$database_block_corruption;",
+        "enabled": true
+      },
+      {
+        "name": "Block Change Tracking",
+        "description": "[5.8] BCT acelera backup incremental; DISABLED com estratégia incremental = recomendação de habilitar.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2d.186 */\n       *\n  FROM v$block_change_tracking;",
+        "enabled": true
+      },
+      {
+        "name": "Redo Log Groups (v$log)",
+        "description": "[5.8] Grupos de redo: tamanho, status, archived. Grupos pequenos demais para a taxa de switch (ver mapa) = achado.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2d.195 */\n     *\n  FROM v$log\n ORDER BY 1, 2, 3, 4;",
+        "enabled": true
+      },
+      {
+        "name": "Redo Log Groups (summary)",
+        "description": "[5.8] Visão resumida por thread/grupo (mesma origem da anterior).",
+        "sql": "SELECT thread#, group#, sequence#, bytes, archived ,status /* 2e.213 */\nFROM v$log ORDER BY thread#, group#;",
+        "enabled": true
+      },
+      {
+        "name": "Redo Log Files",
+        "description": "[5.8] Membros e caminhos dos redo logs. Grupo com um único membro = sem multiplexação (achado); membros no mesmo filesystem = risco.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2d.196 */\n     *\n  FROM v$logfile\n ORDER BY 1, 2, 3, 4;",
+        "enabled": true
+      },
+      {
+        "name": "Redo Log History (31 days)",
+        "description": "[5.8] Switches por dia nos últimos 31 dias.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 2d.197 */\n THREAD#, TO_CHAR(trunc(FIRST_TIME), 'YYYY-MON-DD') day, count(*)\nFROM v$log_history\nwhere FIRST_TIME >= (sysdate - 31)\ngroup by rollup(THREAD#, trunc(FIRST_TIME))\norder by THREAD#, trunc(FIRST_TIME);",
+        "enabled": true
+      },
+      {
+        "name": "Redo Switches Frequency Map",
+        "description": "[5.8] Mapa hora a hora de switches (últimos 14 dias). Média sustentada acima de ~6-12 switches/hora = redo pequeno; recomendar aumentar o tamanho dos grupos.",
+        "sql": "WITH\nlog AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2d.198 */\n       thread#,\n       TO_CHAR(TRUNC(first_time), 'YYYY-MM-DD') yyyy_mm_dd,\n       TO_CHAR(TRUNC(first_time), 'Dy') day,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '00', 1, 0)) h00,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '01', 1, 0)) h01,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '02', 1, 0)) h02,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '03', 1, 0)) h03,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '04', 1, 0)) h04,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '05', 1, 0)) h05,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '06', 1, 0)) h06,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '07', 1, 0)) h07,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '08', 1, 0)) h08,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '09', 1, 0)) h09,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '10', 1, 0)) h10,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '11', 1, 0)) h11,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '12', 1, 0)) h12,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '13', 1, 0)) h13,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '14', 1, 0)) h14,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '15', 1, 0)) h15,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '16', 1, 0)) h16,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '17', 1, 0)) h17,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '18', 1, 0)) h18,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '19', 1, 0)) h19,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '20', 1, 0)) h20,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '21', 1, 0)) h21,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '22', 1, 0)) h22,\n       SUM(DECODE(TO_CHAR(first_time, 'HH24'), '23', 1, 0)) h23,\n       COUNT(*) per_day\n  FROM v$log_history\n GROUP BY\n       thread#,\n       TRUNC(first_time)\n ORDER BY\n       thread#,\n       TRUNC(first_time) DESC NULLS LAST\n),\nordered_log AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2d.198 */\n       ROWNUM row_num_noprint, log.*\n  FROM log\n),\nmin_set AS (\nSELECT /*+  MATERIALIZE NO_MERGE  */ /* 2d.198 */\n       thread#,\n       MIN(row_num_noprint) min_row_num\n  FROM ordered_log\n GROUP BY\n       thread#\n)\nSELECT /*+  NO_MERGE  */ /* 2d.198 */\n       log.*\n  FROM ordered_log log,\n       min_set ms\n WHERE log.thread# = ms.thread#\n   AND log.row_num_noprint < ms.min_row_num + 14\n ORDER BY\n       log.thread#,\n       log.yyyy_mm_dd DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Redo Threads",
+        "description": "[5.8] Threads de redo da instância. Informativo.",
+        "sql": "SELECT thread#, instance, status /* 2e.209 */\nFROM v$thread;",
+        "enabled": true
+      },
+      {
+        "name": "Archive Destinations",
+        "description": "[5.8] Destinos de archive configurados por thread.",
+        "sql": "SELECT thread#, dest_id, destination, target, schedule, process /* 2e.215 */\n FROM gv$archive_dest gvad, gv$instance gvi\n WHERE gvad.inst_id = gvi.inst_id\n   AND destination is NOT NULL\n ORDER BY thread#, dest_id;",
+        "enabled": true
+      },
+      {
+        "name": "Archive Destination Errors",
+        "description": "[5.8] Erros por destino de archive; qualquer ERROR = achado (archiver travado derruba o banco).",
+        "sql": "SELECT thread#, dest_id, gvad.status, error, fail_sequence /* 2e.217 */\n FROM gv$archive_dest gvad, gv$instance gvi\nWHERE gvad.inst_id = gvi.inst_id\n  AND destination is NOT NULL\nORDER BY thread#, dest_id;",
+        "enabled": true
+      },
+      {
+        "name": "Standby Destination Status",
+        "description": "[5.8] Status dos destinos standby (modo, proteção, recovery). Gap ou modo inesperado = achado.",
+        "sql": "SELECT dest_id, database_mode, recovery_mode, protection_mode, standby_logfile_count, standby_logfile_active /* 2e.221 */\n  FROM v$archive_dest_status\n WHERE destination IS NOT NULL;",
+        "enabled": true
+      },
+      {
+        "name": "Standby Redo Logs",
+        "description": "[5.8] Standby redo logs; ausência (ou quantidade menor que redo+1 por thread) com Data Guard = achado.",
+        "sql": "SELECT thread#, group#, sequence#, bytes, archived, status /* 2e.214 */\nFROM v$standby_log order by thread#, group#;",
+        "enabled": true
+      },
+      {
+        "name": "NOLOGGING Objects",
+        "description": "[5.8] Objetos NOLOGGING: cargas direct-path ficam irrecuperáveis por backup e corrompem standby. Com backup/DR: recomendar LOGGING (ou force_logging no banco) e conferir a intenção de cada caso.",
+        "sql": "WITH\nobjects AS (\nSELECT 1 record_type,\n       'TABLESPACE' object_type,\n       --con_id,\n       tablespace_name,\n       NULL owner,\n       NULL name,\n       NULL column_name,\n       NULL partition,\n       NULL subpartition\n  FROM dba_tablespaces\n WHERE logging = 'NOLOGGING'\n   AND contents != 'TEMPORARY'\nUNION ALL\nSELECT 2 record_type,\n       'TABLE' object_type,\n       --con_id,\n       tablespace_name,\n       owner,\n       table_name name,\n       NULL column_name,\n       NULL partition,\n       NULL subpartition\n  FROM dba_all_tables\n WHERE logging = 'NO'\n   AND temporary = 'N'\nUNION ALL\nSELECT 3 record_type,\n       'INDEX' object_type,\n       --con_id,\n       tablespace_name,\n       owner,\n       index_name name,\n       NULL column_name,\n       NULL partition,\n       NULL subpartition\n  FROM dba_indexes\n WHERE logging = 'NO'\n   AND temporary = 'N'\nUNION ALL\nSELECT 4 record_type,\n       'LOB' object_type,\n       --con_id,\n       tablespace_name,\n       owner,\n       table_name name,\n       SUBSTR(column_name, 1, 30) column_name,\n       NULL partition,\n       NULL subpartition\n  FROM dba_lobs\n WHERE logging = 'NO'\nUNION ALL\nSELECT 5 record_type,\n       'TAB_PARTITION' object_type,\n       --con_id,\n       tablespace_name,\n       table_owner owner,\n       table_name name,\n       NULL column_name,\n       partition_name partition,\n       NULL subpartition\n  FROM dba_tab_partitions\n WHERE logging = 'NO'\nUNION ALL\nSELECT 6 record_type,\n       'IND_PARTITION' object_type,\n       --con_id,\n       tablespace_name,\n       index_owner owner,\n       index_name name,\n       NULL column_name,\n       partition_name partition,\n       NULL subpartition\n  FROM dba_ind_partitions\n WHERE logging = 'NO'\nUNION ALL\nSELECT 7 record_type,\n       'LOB_PARTITION' object_type,\n       --con_id,\n       tablespace_name,\n       table_owner owner,\n       table_name name,\n       SUBSTR(column_name, 1, 30) column_name,\n       partition_name partition,\n       NULL subpartition\n  FROM dba_lob_partitions\n WHERE logging = 'NO'\nUNION ALL\nSELECT 8 record_type,\n       'TAB_SUBPARTITION' object_type,\n       --con_id,\n       tablespace_name,\n       table_owner owner,\n       table_name name,\n       NULL column_name,\n       partition_name partition,\n       subpartition_name subpartition\n  FROM dba_tab_subpartitions\n WHERE logging = 'NO'\nUNION ALL\nSELECT 9 record_type,\n       'IND_SUBPARTITION' object_type,\n       --con_id,\n       tablespace_name,\n       index_owner owner,\n       index_name name,\n       NULL column_name,\n       partition_name partition,\n       subpartition_name subpartition\n  FROM dba_ind_subpartitions\n WHERE logging = 'NO'\nUNION ALL\nSELECT 10 record_type,\n       'LOB_SUBPARTITION' object_type,\n       --con_id,\n       tablespace_name,\n       table_owner owner,\n       table_name name,\n       SUBSTR(column_name, 1, 30) column_name,\n       lob_partition_name partition,\n       subpartition_name subpartition\n  FROM dba_lob_subpartitions\n WHERE logging = 'NO'\n)\nSELECT x.object_type,\n       --x.con_id,\n\t   x.tablespace_name,\n       x.owner,\n       x.name,\n       x.column_name,\n       x.partition,\n       x.subpartition\n\t   --,c.name con_name\n  FROM objects x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       x.record_type,\n       --con_id,\n\t   x.tablespace_name,\n       x.owner,\n       x.name,\n       x.column_name,\n       x.partition,\n       x.subpartition;",
+        "enabled": true
+      },
+      {
+        "name": "Audit Parameters",
+        "description": "[5.9] Parâmetros de auditoria. audit_trail=NONE sem Unified Audit configurado = achado (sem rastreabilidade para investigar incidentes); recomendar ao menos auditoria de mudanças de objetos.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1c.41 */\n       inst_id, name \"PARAMETER\", value, isdefault, ismodified\n  FROM gv$system_parameter2\n WHERE name LIKE '%audit%'\n ORDER BY 2,1,3;",
+        "enabled": true
+      },
+      {
+        "name": "Users with Sensitive Roles",
+        "description": "[5.9] Usuários com roles sensíveis (DBA, RESOURCE, %ANY%, IMP/EXP_FULL...). Explicar o risco das principais roles encontradas e recomendar least privilege (Privilege Analysis é free desde 18c).",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1b.29 */\n       x.*\n       --,c.name con_name\n  FROM dba_role_privs x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n WHERE (x.granted_role in\n('AQ_ADMINISTRATOR_ROLE','DELETE_CATALOG_ROLE','DBA','DM_CATALOG_ROLE','EXECUTE_CATALOG_ROLE',\n'EXP_FULL_DATABASE','GATHER_SYSTEM_STATISTICS','HS_ADMIN_ROLE','IMP_FULL_DATABASE',\n   'JAVASYSPRIV','JAVA_ADMIN','JAVA_DEPLOY','LOGSTDBY_ADMINISTRATOR',\n   'OEM_MONITOR','OLAP_DBA','RECOVERY_CATALOG_OWNER','SCHEDULER_ADMIN',\n   'SELECT_CATALOG_ROLE','WM_ADMIN_ROLE','XDBADMIN','RESOURCE')\n    or x.granted_role like '%ANY%')\n   and x.grantee not in ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\n   and x.grantee not in ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n   and (x.grantee\n       --,x.con_id\n\t   ) IN (SELECT u.username\n\t              --, u.con_id\n\t\t     FROM dba_users u)\norder by x.grantee, x.granted_role\n--,x.con_id;",
+        "enabled": true
+      },
+      {
+        "name": "Non-default System Grants",
+        "description": "[5.9] System privileges concedidos a usuários/roles não-Oracle; revisar excessos e privilégios perigosos (ALTER SYSTEM, CREATE ANY...).",
+        "sql": "select  /*+  NO_MERGE  */ /* 1b.36 */\nx.*\n--,c.name con_name\nFROM   dba_sys_privs x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\nWHERE  1=1\n  AND (x.GRANTEE\n      --,x.con_id\n      ) not in (SELECT ROLE\n                      --, con_id\n                FROM   dba_roles WHERE ORACLE_MAINTAINED='Y')\n  AND (x.GRANTEE\n      --,x.con_id\n      ) not in (SELECT USERNAME\n                      --, con_id\n                FROM   dba_users WHERE ORACLE_MAINTAINED='Y');",
+        "enabled": true
+      },
+      {
+        "name": "Users with Inappropriate Tablespaces",
+        "description": "[5.9] Usuários com default tablespace SYSTEM/SYSAUX ou temporary errada; corrigir para evitar crescimento indevido do dicionário.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1b.30 */\n       x.*\n       --,c.name con_name\nFROM   dba_users x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id, c\nWHERE  (x.default_tablespace in ('SYSAUX','SYSTEM')\nor (x.temporary_tablespace\n   --,x.con_id\n   ) not in\n   (select t.tablespace_name\n          --,t.con_id\n   from dba_tablespaces t\n   where t.contents = 'TEMPORARY'\n   and t.status = 'ONLINE'))\nand NVL((SELECT COUNT(*)\n         FROM dba_tablespace_groups g, dba_tablespaces t\n         WHERE g.group_name = x.temporary_tablespace\n\t\t --AND g.con_id = x.con_id\n\t\t --AND t.con_id = g.con_id\n         AND t.tablespace_name = g.tablespace_name\n         AND t.contents IN ('PERMANENT', 'UNDO')), 0) != 0\nand x.username not in ('ANONYMOUS','APEX_030200','APEX_040000','APEX_040200','APEX_180200','APEX_SSO','APPQOSSYS','CTXSYS','DBSNMP','DIP','EXFSYS','FLOWS_FILES','MDSYS','OLAPSYS','ORACLE_OCM','ORDDATA','ORDPLUGINS','ORDSYS','OUTLN','OWBSYS')\nand x.username not in ('SI_INFORMTN_SCHEMA','SQLTXADMIN','SQLTXPLAIN','SYS','SYSMAN','SYSTEM','TRCANLZR','WMSYS','XDB','XS$NULL','PERFSTAT','STDBYPERF','MGDSYS','OJVMSYS','GSMADMIN_INTERNAL')\n order by x.username\n         --,x.con_id;",
+        "enabled": true
+      },
+      {
+        "name": "Proxy Users",
+        "description": "[5.9] Conexões proxy (conectar como outro usuário); confirmar necessidade de cada uma e remover as vencidas.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1b.31 */ *\n  FROM proxy_users\n ORDER BY client;",
+        "enabled": true
+      },
+      {
+        "name": "Database Links",
+        "description": "[5.9] DB links por owner; PUBLIC merece destaque (qualquer usuário acessa) — má prática e risco de segurança. Recomendar revisão e remoção dos desnecessários.",
+        "sql": "SELECT /*+  NO_MERGE  */ /* 1a.18 */\n       x.*\n\t   --,c.name con_name\n  FROM dba_db_links x\n       --LEFT OUTER JOIN v$containers c ON c.con_id = x.con_id\n ORDER BY\n       --x.con_id,\n       x.owner,\n       x.db_link;",
+        "enabled": true
+      },
+      {
+        "name": "Alert Log (recent)",
+        "description": "[5.10] Últimas mensagens do alert log (mais recentes primeiro; o prompt mostra só as primeiras linhas — uma amostra). Procurar ORA-, deadlocks, checkpoint incompleto, travas de archiver. Basear-se apenas no que aparece.",
+        "sql": "SELECT\n    time,\n    alert\nFROM (\n    SELECT\n        alert.record_id,\n        alert.originating_timestamp AT TIME ZONE SESSIONTIMEZONE AS time,\n        alert.message_text AS alert\n    FROM\n        v$diag_alert_ext alert\n    ORDER BY\n        alert.record_id DESC\n    FETCH FIRST 2000 ROWS ONLY\n)\nORDER BY\n    record_id DESC;",
+        "enabled": true
+      }
+    ]
+  }
+}
