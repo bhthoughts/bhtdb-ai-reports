@@ -10,7 +10,7 @@ AI analysis instructions.
 <!-- reports-table:start -->
 | Report | SQLs | Author | Last updated |
 |---|---|---|---|
-| [Health Check](reports/health_check.json) | 87 | @bht | 2026-08-20 |
+| [Database Health Check](reports/health_check.json) | 87 | @bhthoughts | 2026-08-20 |
 <!-- reports-table:end -->
 
 Author and last-updated come from this repository's git history, maintained
