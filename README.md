@@ -10,6 +10,7 @@ AI analysis instructions.
 <!-- reports-table:start -->
 | Report | SQLs | Author | Last updated |
 |---|---|---|---|
+| [Blocking Sessions](reports/blocking_sessions.json) | 11 | @bhthoughts | 2026-08-21 |
 | [Database Health Check](reports/health_check.json) | 88 | @bhthoughts | 2026-08-21 |
 <!-- reports-table:end -->
 
