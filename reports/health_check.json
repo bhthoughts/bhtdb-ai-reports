@@ -423,6 +423,12 @@
         "enabled": true
       },
       {
+        "name": "Control Files",
+        "description": "[5.8] Control files do banco. MENOS DE 2 arquivos = sem multiplexação — achado crítico (perder o único control file derruba o banco e complica o recovery); todos no mesmo disco/filesystem (mesmo prefixo de caminho) = risco equivalente; STATUS INVALID = achado. Recomendar multiplexar em pelo menos 2 discos distintos.",
+        "sql": "SELECT /*+  NO_MERGE  */\n       name,\n       status,\n       is_recovery_dest_file,\n       block_size,\n       file_size_blks,\n       ROUND(block_size * file_size_blks / POWER(10,6)) size_mb\n  FROM v$controlfile\n ORDER BY\n       name;",
+        "enabled": true
+      },
+      {
         "name": "Redo Log Groups (v$log)",
         "description": "[5.8] Grupos de redo: tamanho, status, archived. Grupos pequenos demais para a taxa de switch (ver mapa) = achado.",
         "sql": "SELECT /*+  NO_MERGE  */ /* 2d.195 */\n     *\n  FROM v$log\n ORDER BY 1, 2, 3, 4;",
@@ -436,7 +442,7 @@
       },
       {
         "name": "Redo Log Files",
-        "description": "[5.8] Membros e caminhos dos redo logs. Grupo com um único membro = sem multiplexação (achado); membros no mesmo filesystem = risco.",
+        "description": "[5.8] Membros e caminhos dos redo logs. Grupo com um único membro = sem multiplexação (achado); membros no mesmo filesystem = risco. Membro com STATUS INVALID ou STALE = achado.",
         "sql": "SELECT /*+  NO_MERGE  */ /* 2d.196 */\n     *\n  FROM v$logfile\n ORDER BY 1, 2, 3, 4;",
         "enabled": true
       },
