@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "kind": "report",
+  "report": {
+    "id": "",
+    "name": "Blocking Sessions",
+    "description": "Point-in-time blocking diagnosis: who blocks whom (full chains), the blockers' identity, transactions and SQL, every lock held or requested with its type decoded, and the objects and rows being fought over. Run it WHILE the blocking is happening — an empty result means no blocking at collection time.",
+    "analysis_instructions": "IDIOMA: escreva TODO o relatório em português (pt-BR). Não traduza jargão técnico consagrado (lock, enqueue, commit, rollback, blocking session, ITL etc.).\n\nThe line above defines the report's OUTPUT LANGUAGE. EVERYTHING in the report is written in that language: prose, table headers, fixed labels and EVERY section title. The English titles and labels in this specification are meant to be TRANSLATED into the output language, never copied verbatim. Only untranslatable technical jargon stays in English. Numbering, order and meaning never change.\n\nThis is a POINT-IN-TIME blocking diagnosis: the data is a snapshot of the moment the report ran. If the collection shows NO blocking (the summary query returned no rows), say exactly that in section 1 — the database had no session blocking at collection time — keep sections 2-5 to one line each stating there is nothing to report, and skip recommendations that assume a problem. Never invent blocking that the data does not show. Each query's description starts with a tag [1]-[5] naming the section where it must be handled.\n\nFORMAT (Markdown): each section title as a level-2 heading (\"## 1. …\"), title text always in the output language. Blank line between titles, paragraphs, lists and tables. Tables ALWAYS as complete Markdown — header row, |---|---| separator and one line per record.\n\n1. Blocking Snapshot (Portuguese title: Panorama do Bloqueio) — the situation in numbers: how many blockers, how many blocked sessions, longest wait, the dominant wait events. One short paragraph a manager could read.\n\n2. Blocking Chains (Portuguese title: Cadeias de Bloqueio) — read the tree: the root blocker(s) at depth 1, who waits under them, chain depths. Point out the root session(s) by inst:sid explicitly.\n\n3. Blockers in Detail (Portuguese title: Bloqueadores em Detalhe) — for EACH root blocker: who it is (user, machine, program, module), its state (an INACTIVE blocker with an old transaction = idle-in-transaction, name it as such), how old its transaction is and how much undo it holds, and what SQL it runs now (CURRENT) or ran last (PREVIOUS). The PREVIOUS statement of an idle blocker usually names the statement that took the lock.\n\n4. Blocked Sessions (Portuguese title: Sessões Bloqueadas) — who is stuck: count, identities, how long, and WHAT they are trying to run. Group victims by blocker when there are many.\n\n5. Lock Source Analysis (Portuguese title: Análise da Origem do Lock) — the heart of this report. For EACH lock type present in the lock map, explain its mechanism and the likely root cause IN THIS DATA, tying event + lock type + objects + rows together. Use this knowledge, only where the data shows the type: TX with \"row lock contention\" = an uncommitted change to the SAME row (name the object and ROWID when the contended-rows query shows them); TX requested in share (S) mode = ITL shortage or unique/PK collision; TM = table-level DML lock — the classic cause is an UNINDEXED FOREIGN KEY on a child table, or LOCK TABLE/DDL mixing with DML; UL = the application's own DBMS_LOCK usage (an application design fact, not a database fault); SQ = sequence cache contention (small or NOCACHE sequence); HW = concurrent inserts growing the same segment (LOB/freelist pressure); RO/CF/CI/PS/ST/TS = system-side coordination, usually a symptom of another operation (name it). Never present a mechanism for a lock type the data does not show.\n\n6. Recommended Actions (Portuguese title: Ações Recomendadas) — two lists. IMMEDIATE: what to do about the current blockage — commit/rollback from the blocking application if reachable; otherwise the kill statement for EACH root blocker with its exact identifiers, clearly labeled as a command for the DBA to review and run manually — this tool is read-only and never executes it: ALTER SYSTEM KILL SESSION 'sid,serial#,@inst_id' IMMEDIATE; STRUCTURAL: what prevents recurrence, tied to the lock source found (index the named FK, commit discipline in the named module, sequence CACHE increase, ITL/INITRANS on the named table, review of the DBMS_LOCK design...).\n\n7. Queries not collected (Portuguese title: Consultas não coletadas) — list each \"NOT COLLECTED\" query with its ORA error and likely cause. If none: say in one line, in the output language, that all queries were collected successfully.\n\nFinal rules: use exclusively this run's results; cite real inst:sid, users, objects and waits from the data; recommend nothing without evidence; a kill recommendation must name ONLY sessions the data shows as root blockers; professional, direct, didactic tone.",
+    "updated_at": "",
+    "origin": "community",
+    "origin_author": "bhthoughts",
+    "origin_updated": "2026-08-21",
+    "sqls": [
+      {
+        "name": "Blocking Summary",
+        "description": "[1] One row per blocker: how many sessions it blocks and for how long (min/max wait). Empty = NO blocking at collection time — say so plainly and keep the whole report short.",
+        "sql": "SELECT w.blocking_instance inst_id,\n       w.blocking_session sid,\n       COUNT(*) sessions_blocked,\n       COUNT(DISTINCT w.event) distinct_wait_events,\n       MIN(w.seconds_in_wait) min_wait_seconds,\n       MAX(w.seconds_in_wait) max_wait_seconds\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n GROUP BY w.blocking_instance, w.blocking_session\n ORDER BY sessions_blocked DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Blocked Wait Events",
+        "description": "[1] What the blocked sessions are waiting ON — the event NAME points at the lock source (enq: TX - row lock contention = uncommitted change to the same row; enq: TM = table-level, often an unindexed FK; enq: TX - allocate ITL entry = ITL shortage; library cache lock = DDL vs SQL; row cache lock = dictionary, often sequences).",
+        "sql": "SELECT w.event,\n       COUNT(*) sessions_waiting,\n       MIN(w.seconds_in_wait) min_wait_seconds,\n       MAX(w.seconds_in_wait) max_wait_seconds\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n GROUP BY w.event\n ORDER BY sessions_waiting DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Blocking Chains",
+        "description": "[2] The wait chains, root blocker first (depth 1); each deeper row waits on the row above it. A depth-1 session blocking many = the root cause; chains more than 2 deep mean blocked sessions are themselves blocking.",
+        "sql": "SELECT LPAD('.', (LEVEL - 1) * 2, '.') || s.inst_id || ':' || s.sid session_ref,\n       LEVEL depth,\n       s.serial#,\n       s.username,\n       s.status,\n       s.event,\n       s.seconds_in_wait,\n       s.sql_id,\n       s.module,\n       s.machine\n  FROM gv$session s\n START WITH s.blocking_session IS NULL\n        AND (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\nCONNECT BY s.blocking_session = PRIOR s.sid\n       AND s.blocking_instance = PRIOR s.inst_id\n ORDER SIBLINGS BY s.seconds_in_wait DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Blockers in Detail",
+        "description": "[3] Full identity of every blocker: who (user/OS user/machine/program/module), state (ACTIVE vs INACTIVE — an INACTIVE blocker holding locks is the classic idle-in-transaction), what it waits on itself, its current and previous SQL ids, last_call_et (seconds since its last activity) and logon time.",
+        "sql": "SELECT s.inst_id,\n       s.sid,\n       s.serial#,\n       s.username,\n       s.osuser,\n       s.machine,\n       s.program,\n       s.module,\n       s.action,\n       s.status,\n       s.state,\n       s.event current_event,\n       s.seconds_in_wait,\n       s.last_call_et seconds_since_last_call,\n       s.sql_id current_sql_id,\n       s.prev_sql_id,\n       TO_CHAR(s.logon_time, 'YYYY-MM-DD HH24:MI:SS') logon_time\n  FROM gv$session s\n WHERE (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\n ORDER BY s.inst_id, s.sid;",
+        "enabled": true
+      },
+      {
+        "name": "Blockers' Transactions",
+        "description": "[3] The open transaction behind each blocker: age, undo blocks/records (how much uncommitted work), I/O. An old transaction with little undo = someone forgot to commit; a huge undo count = a batch still running. No row for a blocker = it holds locks without an active transaction (e.g. DDL, library cache, DBMS_LOCK).",
+        "sql": "SELECT s.inst_id,\n       s.sid,\n       s.serial#,\n       s.username,\n       t.status tx_status,\n       t.start_time tx_start_time,\n       ROUND((SYSDATE - TO_DATE(t.start_time, 'MM/DD/RR HH24:MI:SS')) * 86400)\n         tx_age_seconds,\n       t.used_ublk undo_blocks,\n       t.used_urec undo_records,\n       t.log_io,\n       t.phy_io\n  FROM gv$transaction t\n  JOIN gv$session s\n    ON s.saddr = t.ses_addr\n   AND s.inst_id = t.inst_id\n WHERE (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\n ORDER BY tx_age_seconds DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Blockers' SQL (current and previous)",
+        "description": "[3] What each blocker is running now (CURRENT; empty when it sits idle) and the last thing it ran (PREVIOUS) — for an idle-in-transaction blocker, PREVIOUS usually names the statement that took the lock.",
+        "sql": "SELECT s.inst_id,\n       s.sid,\n       'CURRENT' which_sql,\n       q.sql_id,\n       q.sql_text\n  FROM gv$session s\n  JOIN gv$sql q\n    ON q.inst_id = s.inst_id\n   AND q.sql_id = s.sql_id\n   AND q.child_number = 0\n WHERE (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\nUNION ALL\nSELECT s.inst_id,\n       s.sid,\n       'PREVIOUS' which_sql,\n       q.sql_id,\n       q.sql_text\n  FROM gv$session s\n  JOIN gv$sql q\n    ON q.inst_id = s.inst_id\n   AND q.sql_id = s.prev_sql_id\n   AND q.child_number = 0\n WHERE (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\n ORDER BY 1, 2, 3;",
+        "enabled": true
+      },
+      {
+        "name": "Blocked Sessions in Detail",
+        "description": "[4] Every blocked session (the victims): identity, the event and how long it has waited, what it is trying to run, and which session blocks it.",
+        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.serial#,\n       w.username,\n       w.osuser,\n       w.machine,\n       w.program,\n       w.module,\n       w.event,\n       w.seconds_in_wait,\n       w.sql_id,\n       w.blocking_instance || ':' || w.blocking_session blocked_by\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n ORDER BY w.seconds_in_wait DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Blocked Sessions' SQL",
+        "description": "[4] The statement each victim is trying to execute — names the application action that is stuck.",
+        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.sql_id,\n       q.sql_text\n  FROM gv$session w\n  JOIN gv$sql q\n    ON q.inst_id = w.inst_id\n   AND q.sql_id = w.sql_id\n   AND q.child_number = 0\n WHERE w.blocking_session IS NOT NULL\n ORDER BY w.inst_id, w.sid;",
+        "enabled": true
+      },
+      {
+        "name": "Lock Map (held vs requested)",
+        "description": "[5] Every lock held that blocks someone (BLOCKS_OTHERS=1) or requested and not granted (MODE_REQUESTED <> none), with the lock TYPE decoded — the core evidence for the lock-source analysis. TX+row events = row contention; TM = table/FK; UL = the application's own DBMS_LOCK; HW = segment growth; SQ = sequence; TX requested in share (S) mode = ITL or same-row primary-key/unique wait.",
+        "sql": "SELECT l.inst_id,\n       l.sid,\n       s.serial#,\n       s.username,\n       l.type lock_type,\n       CASE l.type\n         WHEN 'TX' THEN 'Transaction (row lock / ITL / undo)'\n         WHEN 'TM' THEN 'DML enqueue (table level)'\n         WHEN 'UL' THEN 'User lock (DBMS_LOCK)'\n         WHEN 'HW' THEN 'High-water mark (segment growth)'\n         WHEN 'SQ' THEN 'Sequence cache'\n         WHEN 'ST' THEN 'Space transaction'\n         WHEN 'TS' THEN 'Temporary segment'\n         WHEN 'RO' THEN 'Reusable object (cache flush)'\n         WHEN 'CF' THEN 'Control file'\n         WHEN 'JI' THEN 'Materialized view refresh'\n         WHEN 'CI' THEN 'Cross-instance call'\n         WHEN 'PS' THEN 'Parallel execution slave'\n         WHEN 'DX' THEN 'Distributed transaction'\n         WHEN 'AE' THEN 'Edition in use'\n         ELSE 'Other/system enqueue'\n       END lock_type_meaning,\n       DECODE(l.lmode, 0, 'none', 1, 'null', 2, 'row-S (SS)',\n              3, 'row-X (SX)', 4, 'share (S)', 5, 'S/row-X (SSX)',\n              6, 'exclusive (X)', TO_CHAR(l.lmode)) mode_held,\n       DECODE(l.request, 0, 'none', 1, 'null', 2, 'row-S (SS)',\n              3, 'row-X (SX)', 4, 'share (S)', 5, 'S/row-X (SSX)',\n              6, 'exclusive (X)', TO_CHAR(l.request)) mode_requested,\n       l.id1,\n       l.id2,\n       l.ctime seconds_in_mode,\n       l.block blocks_others\n  FROM gv$lock l\n  JOIN gv$session s\n    ON s.inst_id = l.inst_id\n   AND s.sid = l.sid\n WHERE l.block > 0\n    OR l.request > 0\n ORDER BY l.type, l.id1, l.id2, l.request DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Locked Objects",
+        "description": "[5] The objects under DML locks and by whom, with the mode decoded — names WHAT is being fought over at object level.",
+        "sql": "SELECT lo.inst_id,\n       lo.session_id sid,\n       s.serial#,\n       lo.oracle_username,\n       o.owner,\n       o.object_name,\n       o.object_type,\n       DECODE(lo.locked_mode, 0, 'none', 1, 'null', 2, 'row-S (SS)',\n              3, 'row-X (SX)', 4, 'share (S)', 5, 'S/row-X (SSX)',\n              6, 'exclusive (X)', TO_CHAR(lo.locked_mode)) locked_mode,\n       lo.os_user_name,\n       lo.process\n  FROM gv$locked_object lo\n  JOIN dba_objects o\n    ON o.object_id = lo.object_id\n  LEFT JOIN gv$session s\n    ON s.inst_id = lo.inst_id\n   AND s.sid = lo.session_id\n ORDER BY o.owner, o.object_name, lo.inst_id, lo.session_id;",
+        "enabled": true
+      },
+      {
+        "name": "Contended Rows",
+        "description": "[5] Down to the ROW: the object and, when Oracle exposes it, the exact ROWID each victim is stuck on — the strongest evidence for row-level (TX) contention. Empty object columns = the wait is not row-positioned (e.g. library cache, DBMS_LOCK).",
+        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.event,\n       o.owner,\n       o.object_name,\n       o.object_type,\n       w.row_wait_file# file_id,\n       w.row_wait_block# block_id,\n       w.row_wait_row# row_num,\n       CASE\n         WHEN o.data_object_id IS NOT NULL AND w.row_wait_obj# > 0\n         THEN DBMS_ROWID.ROWID_CREATE(1, o.data_object_id, w.row_wait_file#,\n                                      w.row_wait_block#, w.row_wait_row#)\n       END row_id\n  FROM gv$session w\n  LEFT JOIN dba_objects o\n    ON o.object_id = w.row_wait_obj#\n WHERE w.blocking_session IS NOT NULL\n ORDER BY o.owner, o.object_name, w.inst_id, w.sid;",
+        "enabled": true
+      }
+    ]
+  }
+}
