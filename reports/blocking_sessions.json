@@ -18,24 +18,6 @@
         "enabled": true
       },
       {
-        "name": "Blocked — Wait Events",
-        "description": "[1] What the blocked sessions are waiting ON — the event NAME points at the lock source (enq: TX - row lock contention = uncommitted change to the same row; enq: TM = table-level, often an unindexed FK; enq: TX - allocate ITL entry = ITL shortage; library cache lock = DDL vs SQL; row cache lock = dictionary, often sequences).",
-        "sql": "SELECT w.event,\n       COUNT(*) sessions_waiting,\n       MIN(w.seconds_in_wait) min_wait_seconds,\n       MAX(w.seconds_in_wait) max_wait_seconds\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n GROUP BY w.event\n ORDER BY sessions_waiting DESC;",
-        "enabled": true
-      },
-      {
-        "name": "Chain — Blocking Tree (blocker → blocked)",
-        "description": "[2] The wait chains, root blocker first (depth 1); each deeper row waits on the row above it. A depth-1 session blocking many = the root cause; chains more than 2 deep mean blocked sessions are themselves blocking.",
-        "sql": "SELECT LPAD('.', (LEVEL - 1) * 2, '.') || s.inst_id || ':' || s.sid session_ref,\n       LEVEL depth,\n       s.serial#,\n       s.username,\n       s.status,\n       s.event,\n       s.seconds_in_wait,\n       s.sql_id,\n       s.module,\n       s.machine\n  FROM gv$session s\n START WITH s.blocking_session IS NULL\n        AND (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\nCONNECT BY s.blocking_session = PRIOR s.sid\n       AND s.blocking_instance = PRIOR s.inst_id\n ORDER SIBLINGS BY s.seconds_in_wait DESC;",
-        "enabled": true
-      },
-      {
-        "name": "Blocker ↔ Blocked — Pairs (lock type, object, row)",
-        "description": "[2] One row per blocker↔blocked pair, side by side: the lock TYPE from v$lock_type (Transaction/DML/User-defined/...), both sessions' events, the object and the exact contended ROWID. Complements the tree (hierarchy) with a flat pairing; its lock type and object also feed section 5. Non-row waits (TM/UL) still appear here, just without an object/row.",
-        "sql": "SELECT s1.inst_id || ':' || s1.sid || ',' || s1.serial# blocking_session,\n       s2.inst_id || ':' || s2.sid || ',' || s2.serial# blocked_session,\n       lt.name lock_type,\n       s1.event blocking_event,\n       s2.event blocked_event,\n       CASE WHEN do.object_name IS NOT NULL\n            THEN do.owner || '.' || do.object_name END object,\n       CASE WHEN do.data_object_id IS NOT NULL AND s2.row_wait_obj# > 0\n            THEN DBMS_ROWID.ROWID_CREATE(1, do.data_object_id, s2.row_wait_file#,\n                                         s2.row_wait_block#, s2.row_wait_row#)\n       END row_id\n  FROM gv$lock l1\n  JOIN gv$session s1 ON s1.inst_id = l1.inst_id AND s1.sid = l1.sid\n  JOIN gv$lock l2 ON l2.id1 = l1.id1 AND l2.id2 = l1.id2\n                 AND l2.type = l1.type AND l2.request > 0\n  JOIN gv$session s2 ON s2.inst_id = l2.inst_id AND s2.sid = l2.sid\n  LEFT JOIN (SELECT type, MAX(name) name FROM gv$lock_type GROUP BY type) lt\n    ON lt.type = l1.type\n  LEFT JOIN dba_objects do ON do.object_id = s2.row_wait_obj#\n WHERE l1.block > 0\n ORDER BY s1.inst_id, s1.sid, s2.sid;",
-        "enabled": true
-      },
-      {
         "name": "Blocker — Session Detail",
         "description": "[3] Full identity of every blocker: who (user/OS user/machine/program/module), state (ACTIVE vs INACTIVE — an INACTIVE blocker holding locks is the classic idle-in-transaction), what it waits on itself, its current and previous SQL ids, last_call_et (seconds since its last activity) and logon time.",
         "sql": "SELECT s.inst_id,\n       s.sid,\n       s.serial#,\n       s.username,\n       s.osuser,\n       s.machine,\n       s.program,\n       s.module,\n       s.action,\n       s.status,\n       s.state,\n       s.event current_event,\n       s.seconds_in_wait,\n       s.last_call_et seconds_since_last_call,\n       s.sql_id current_sql_id,\n       s.prev_sql_id,\n       TO_CHAR(s.logon_time, 'YYYY-MM-DD HH24:MI:SS') logon_time\n  FROM gv$session s\n WHERE (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\n ORDER BY s.inst_id, s.sid;",
@@ -54,15 +36,15 @@
         "enabled": true
       },
       {
-        "name": "Blocked — Session Detail",
-        "description": "[4] Every blocked session (the victims): identity, the event and how long it has waited, what it is trying to run, and which session blocks it.",
-        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.serial#,\n       w.username,\n       w.osuser,\n       w.machine,\n       w.program,\n       w.module,\n       w.event,\n       w.seconds_in_wait,\n       w.sql_id,\n       w.blocking_instance || ':' || w.blocking_session blocked_by\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n ORDER BY w.seconds_in_wait DESC;",
+        "name": "Chain — Blocking Tree (blocker → blocked)",
+        "description": "[2] The wait chains, root blocker first (depth 1); each deeper row waits on the row above it. A depth-1 session blocking many = the root cause; chains more than 2 deep mean blocked sessions are themselves blocking.",
+        "sql": "SELECT LPAD('.', (LEVEL - 1) * 2, '.') || s.inst_id || ':' || s.sid session_ref,\n       LEVEL depth,\n       s.serial#,\n       s.username,\n       s.status,\n       s.event,\n       s.seconds_in_wait,\n       s.sql_id,\n       s.module,\n       s.machine\n  FROM gv$session s\n START WITH s.blocking_session IS NULL\n        AND (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\nCONNECT BY s.blocking_session = PRIOR s.sid\n       AND s.blocking_instance = PRIOR s.inst_id\n ORDER SIBLINGS BY s.seconds_in_wait DESC;",
         "enabled": true
       },
       {
-        "name": "Blocked — SQL Being Attempted",
-        "description": "[4] The statement each victim is trying to execute — names the application action that is stuck.",
-        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.sql_id,\n       q.sql_text\n  FROM gv$session w\n  JOIN gv$sql q\n    ON q.inst_id = w.inst_id\n   AND q.sql_id = w.sql_id\n   AND q.child_number = 0\n WHERE w.blocking_session IS NOT NULL\n ORDER BY w.inst_id, w.sid;",
+        "name": "Blocker ↔ Blocked — Pairs (lock type, object, row)",
+        "description": "[2] One row per blocker↔blocked pair, side by side: the lock TYPE from v$lock_type (Transaction/DML/User-defined/...), both sessions' events, the object and the exact contended ROWID. Complements the tree (hierarchy) with a flat pairing; its lock type and object also feed section 5. Non-row waits (TM/UL) still appear here, just without an object/row.",
+        "sql": "SELECT s1.inst_id || ':' || s1.sid || ',' || s1.serial# blocking_session,\n       s2.inst_id || ':' || s2.sid || ',' || s2.serial# blocked_session,\n       lt.name lock_type,\n       s1.event blocking_event,\n       s2.event blocked_event,\n       CASE WHEN do.object_name IS NOT NULL\n            THEN do.owner || '.' || do.object_name END object,\n       CASE WHEN do.data_object_id IS NOT NULL AND s2.row_wait_obj# > 0\n            THEN DBMS_ROWID.ROWID_CREATE(1, do.data_object_id, s2.row_wait_file#,\n                                         s2.row_wait_block#, s2.row_wait_row#)\n       END row_id\n  FROM gv$lock l1\n  JOIN gv$session s1 ON s1.inst_id = l1.inst_id AND s1.sid = l1.sid\n  JOIN gv$lock l2 ON l2.id1 = l1.id1 AND l2.id2 = l1.id2\n                 AND l2.type = l1.type AND l2.request > 0\n  JOIN gv$session s2 ON s2.inst_id = l2.inst_id AND s2.sid = l2.sid\n  LEFT JOIN (SELECT type, MAX(name) name FROM gv$lock_type GROUP BY type) lt\n    ON lt.type = l1.type\n  LEFT JOIN dba_objects do ON do.object_id = s2.row_wait_obj#\n WHERE l1.block > 0\n ORDER BY s1.inst_id, s1.sid, s2.sid;",
         "enabled": true
       },
       {
@@ -75,6 +57,24 @@
         "name": "Lock — Locked Objects (both sessions)",
         "description": "[5] The objects under DML locks and by whom, with the mode decoded — names WHAT is being fought over at object level.",
         "sql": "SELECT lo.inst_id,\n       lo.session_id sid,\n       s.serial#,\n       lo.oracle_username,\n       o.owner,\n       o.object_name,\n       o.object_type,\n       DECODE(lo.locked_mode, 0, 'none', 1, 'null', 2, 'row-S (SS)',\n              3, 'row-X (SX)', 4, 'share (S)', 5, 'S/row-X (SSX)',\n              6, 'exclusive (X)', TO_CHAR(lo.locked_mode)) locked_mode,\n       lo.os_user_name,\n       lo.process\n  FROM gv$locked_object lo\n  JOIN dba_objects o\n    ON o.object_id = lo.object_id\n  LEFT JOIN gv$session s\n    ON s.inst_id = lo.inst_id\n   AND s.sid = lo.session_id\n ORDER BY o.owner, o.object_name, lo.inst_id, lo.session_id;",
+        "enabled": true
+      },
+      {
+        "name": "Blocked — Wait Events",
+        "description": "[1] What the blocked sessions are waiting ON — the event NAME points at the lock source (enq: TX - row lock contention = uncommitted change to the same row; enq: TM = table-level, often an unindexed FK; enq: TX - allocate ITL entry = ITL shortage; library cache lock = DDL vs SQL; row cache lock = dictionary, often sequences).",
+        "sql": "SELECT w.event,\n       COUNT(*) sessions_waiting,\n       MIN(w.seconds_in_wait) min_wait_seconds,\n       MAX(w.seconds_in_wait) max_wait_seconds\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n GROUP BY w.event\n ORDER BY sessions_waiting DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Blocked — Session Detail",
+        "description": "[4] Every blocked session (the victims): identity, the event and how long it has waited, what it is trying to run, and which session blocks it.",
+        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.serial#,\n       w.username,\n       w.osuser,\n       w.machine,\n       w.program,\n       w.module,\n       w.event,\n       w.seconds_in_wait,\n       w.sql_id,\n       w.blocking_instance || ':' || w.blocking_session blocked_by\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n ORDER BY w.seconds_in_wait DESC;",
+        "enabled": true
+      },
+      {
+        "name": "Blocked — SQL Being Attempted",
+        "description": "[4] The statement each victim is trying to execute — names the application action that is stuck.",
+        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.sql_id,\n       q.sql_text\n  FROM gv$session w\n  JOIN gv$sql q\n    ON q.inst_id = w.inst_id\n   AND q.sql_id = w.sql_id\n   AND q.child_number = 0\n WHERE w.blocking_session IS NOT NULL\n ORDER BY w.inst_id, w.sid;",
         "enabled": true
       },
       {
