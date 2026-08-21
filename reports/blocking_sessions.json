@@ -38,7 +38,7 @@
       {
         "name": "Chain — Blocking Tree (blocker → blocked)",
         "description": "[2] The wait chains, root blocker first (depth 1); each deeper row waits on the row above it. A depth-1 session blocking many = the root cause; chains more than 2 deep mean blocked sessions are themselves blocking.",
-        "sql": "SELECT LPAD('.', (LEVEL - 1) * 2, '.') || s.inst_id || ':' || s.sid session_ref,\n       LEVEL depth,\n       s.serial#,\n       s.username,\n       s.status,\n       s.event,\n       s.seconds_in_wait,\n       s.sql_id,\n       s.module,\n       s.machine\n  FROM gv$session s\n START WITH s.blocking_session IS NULL\n        AND (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\nCONNECT BY s.blocking_session = PRIOR s.sid\n       AND s.blocking_instance = PRIOR s.inst_id\n ORDER SIBLINGS BY s.seconds_in_wait DESC;",
+        "sql": "SELECT CASE WHEN LEVEL = 1\n            THEN s.inst_id || ':' || s.sid\n            ELSE LPAD('-', (LEVEL - 1) * 4, '-') || '> '\n                 || s.inst_id || ':' || s.sid\n       END session_ref,\n       LEVEL depth,\n       s.serial#,\n       s.username,\n       s.status,\n       s.event,\n       s.seconds_in_wait,\n       s.sql_id,\n       s.module,\n       s.machine\n  FROM gv$session s\n START WITH s.blocking_session IS NULL\n        AND (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\nCONNECT BY s.blocking_session = PRIOR s.sid\n       AND s.blocking_instance = PRIOR s.inst_id\n ORDER SIBLINGS BY s.seconds_in_wait DESC;",
         "enabled": true
       },
       {
@@ -61,8 +61,8 @@
       },
       {
         "name": "Blocked — Wait Events",
-        "description": "[1] What the blocked sessions are waiting ON — the event NAME points at the lock source (enq: TX - row lock contention = uncommitted change to the same row; enq: TM = table-level, often an unindexed FK; enq: TX - allocate ITL entry = ITL shortage; library cache lock = DDL vs SQL; row cache lock = dictionary, often sequences).",
-        "sql": "SELECT w.event,\n       COUNT(*) sessions_waiting,\n       MIN(w.seconds_in_wait) min_wait_seconds,\n       MAX(w.seconds_in_wait) max_wait_seconds\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n GROUP BY w.event\n ORDER BY sessions_waiting DESC;",
+        "description": "[1] What the blocked sessions are waiting ON — the event NAME points at the lock source (enq: TX - row lock contention = uncommitted change to the same row; enq: TM = table-level, often an unindexed FK; enq: TX - allocate ITL entry = ITL shortage; library cache lock = DDL vs SQL; row cache lock = dictionary, often sequences). The blocked_sessions column lists the inst:sid of every waiter on that event.",
+        "sql": "SELECT w.event,\n       COUNT(*) sessions_waiting,\n       MIN(w.seconds_in_wait) min_wait_seconds,\n       MAX(w.seconds_in_wait) max_wait_seconds,\n       LISTAGG(w.inst_id || ':' || w.sid, ', ' ON OVERFLOW TRUNCATE)\n         WITHIN GROUP (ORDER BY w.inst_id, w.sid) blocked_sessions\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n GROUP BY w.event\n ORDER BY sessions_waiting DESC;",
         "enabled": true
       },
       {
