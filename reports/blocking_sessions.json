@@ -14,7 +14,7 @@
       {
         "name": "Blocker — Summary",
         "description": "[1] One row per blocker: how many sessions it blocks and for how long (min/max wait). Empty = NO blocking at collection time — say so plainly and keep the whole report short.",
-        "sql": "SELECT w.blocking_instance inst_id,\n       w.blocking_session sid,\n       COUNT(*) sessions_blocked,\n       COUNT(DISTINCT w.event) distinct_wait_events,\n       MIN(w.seconds_in_wait) min_wait_seconds,\n       MAX(w.seconds_in_wait) max_wait_seconds\n  FROM gv$session w\n WHERE w.blocking_session IS NOT NULL\n GROUP BY w.blocking_instance, w.blocking_session\n ORDER BY sessions_blocked DESC;",
+        "sql": "SELECT w.blocking_instance inst_id,\n       w.blocking_session sid,\n       b.serial#,\n       COUNT(*) sessions_blocked,\n       COUNT(DISTINCT w.event) distinct_wait_events,\n       MIN(w.seconds_in_wait) min_wait_seconds,\n       MAX(w.seconds_in_wait) max_wait_seconds\n  FROM gv$session w\n  JOIN gv$session b\n    ON b.inst_id = w.blocking_instance\n   AND b.sid = w.blocking_session\n WHERE w.blocking_session IS NOT NULL\n GROUP BY w.blocking_instance, w.blocking_session, b.serial#\n ORDER BY sessions_blocked DESC;",
         "enabled": true
       },
       {
@@ -32,7 +32,7 @@
       {
         "name": "Blocker — Current & Previous SQL",
         "description": "[3] What each blocker is running now (CURRENT; empty when it sits idle) and the last thing it ran (PREVIOUS) — for an idle-in-transaction blocker, PREVIOUS usually names the statement that took the lock.",
-        "sql": "SELECT s.inst_id,\n       s.sid,\n       'CURRENT' which_sql,\n       q.sql_id,\n       q.sql_text\n  FROM gv$session s\n  JOIN gv$sql q\n    ON q.inst_id = s.inst_id\n   AND q.sql_id = s.sql_id\n   AND q.child_number = 0\n WHERE (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\nUNION ALL\nSELECT s.inst_id,\n       s.sid,\n       'PREVIOUS' which_sql,\n       q.sql_id,\n       q.sql_text\n  FROM gv$session s\n  JOIN gv$sql q\n    ON q.inst_id = s.inst_id\n   AND q.sql_id = s.prev_sql_id\n   AND q.child_number = 0\n WHERE (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\n ORDER BY 1, 2, 3;",
+        "sql": "SELECT s.inst_id,\n       s.sid,\n       s.serial#,\n       'CURRENT' which_sql,\n       q.sql_id,\n       q.sql_text\n  FROM gv$session s\n  JOIN gv$sql q\n    ON q.inst_id = s.inst_id\n   AND q.sql_id = s.sql_id\n   AND q.child_number = 0\n WHERE (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\nUNION ALL\nSELECT s.inst_id,\n       s.sid,\n       s.serial#,\n       'PREVIOUS' which_sql,\n       q.sql_id,\n       q.sql_text\n  FROM gv$session s\n  JOIN gv$sql q\n    ON q.inst_id = s.inst_id\n   AND q.sql_id = s.prev_sql_id\n   AND q.child_number = 0\n WHERE (s.inst_id, s.sid) IN (SELECT w.blocking_instance, w.blocking_session\n                                FROM gv$session w\n                               WHERE w.blocking_session IS NOT NULL)\n ORDER BY 1, 2, 4;",
         "enabled": true
       },
       {
@@ -74,13 +74,13 @@
       {
         "name": "Blocked — SQL Being Attempted",
         "description": "[4] The statement each victim is trying to execute — names the application action that is stuck.",
-        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.sql_id,\n       q.sql_text\n  FROM gv$session w\n  JOIN gv$sql q\n    ON q.inst_id = w.inst_id\n   AND q.sql_id = w.sql_id\n   AND q.child_number = 0\n WHERE w.blocking_session IS NOT NULL\n ORDER BY w.inst_id, w.sid;",
+        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.serial#,\n       w.sql_id,\n       q.sql_text\n  FROM gv$session w\n  JOIN gv$sql q\n    ON q.inst_id = w.inst_id\n   AND q.sql_id = w.sql_id\n   AND q.child_number = 0\n WHERE w.blocking_session IS NOT NULL\n ORDER BY w.inst_id, w.sid;",
         "enabled": true
       },
       {
         "name": "Blocked — Contended Row",
         "description": "[5] Down to the ROW: the object and, when Oracle exposes it, the exact ROWID each victim is stuck on — the strongest evidence for row-level (TX) contention. Empty object columns = the wait is not row-positioned (e.g. library cache, DBMS_LOCK).",
-        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.event,\n       o.owner,\n       o.object_name,\n       o.object_type,\n       w.row_wait_file# file_id,\n       w.row_wait_block# block_id,\n       w.row_wait_row# row_num,\n       CASE\n         WHEN o.data_object_id IS NOT NULL AND w.row_wait_obj# > 0\n         THEN DBMS_ROWID.ROWID_CREATE(1, o.data_object_id, w.row_wait_file#,\n                                      w.row_wait_block#, w.row_wait_row#)\n       END row_id\n  FROM gv$session w\n  LEFT JOIN dba_objects o\n    ON o.object_id = w.row_wait_obj#\n WHERE w.blocking_session IS NOT NULL\n ORDER BY o.owner, o.object_name, w.inst_id, w.sid;",
+        "sql": "SELECT w.inst_id,\n       w.sid,\n       w.serial#,\n       w.event,\n       o.owner,\n       o.object_name,\n       o.object_type,\n       w.row_wait_file# file_id,\n       w.row_wait_block# block_id,\n       w.row_wait_row# row_num,\n       CASE\n         WHEN o.data_object_id IS NOT NULL AND w.row_wait_obj# > 0\n         THEN DBMS_ROWID.ROWID_CREATE(1, o.data_object_id, w.row_wait_file#,\n                                      w.row_wait_block#, w.row_wait_row#)\n       END row_id\n  FROM gv$session w\n  LEFT JOIN dba_objects o\n    ON o.object_id = w.row_wait_obj#\n WHERE w.blocking_session IS NOT NULL\n ORDER BY o.owner, o.object_name, w.inst_id, w.sid;",
         "enabled": true
       }
     ]
