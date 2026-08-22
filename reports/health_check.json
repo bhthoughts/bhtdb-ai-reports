@@ -94,8 +94,8 @@
       },
       {
         "name": "Parallel Parameters",
-        "description": "[5.2] parallel% parameters including hidden ones (requires an X$ grant; may fail). Check parallel_max_servers/threshold coherence against the CPUs in section 4.",
-        "sql": "select name, description, value, isdefault, ismodified, isset\nfrom\n(\nselect flag,name,value,isdefault,ismodified,\ncase when isdefault||ismodified = 'TRUEFALSE' then 'FALSE' else 'TRUE' end isset ,\ndescription\nfrom\n   (\n       select\n            decode(substr(i.ksppinm,1,1),'_',2,1) flag\n            , i.ksppinm name\n            , sv.ksppstvl value\n            , sv.ksppstdf  isdefault\n--            , decode(bitand(sv.ksppstvf,7),1,'MODIFIED',4,'SYSTEM_MOD','FALSE') ismodified\n            , decode(bitand(sv.ksppstvf,7),1,'TRUE',4,'TRUE','FALSE') ismodified\n, i.KSPPDESC description\n         from sys.x$ksppi  i\n            , sys.x$ksppsv sv\n        where i.indx = sv.indx\n   )\n)\nwhere name like nvl('%parallel%',name)\nand flag != 3\norder by flag,replace(name,'_','');",
+        "description": "[5.2] parallel% instance parameters from gv$system_parameter2 — readable by a normal monitoring user (the previous X$ source was SYS-only and failed with ORA-00942). Hidden _parallel% parameters are not visible without X$ access, deliberately. Check parallel_max_servers/threshold coherence against the CPUs in section 4.",
+        "sql": "SELECT inst_id,\n       name,\n       value,\n       isdefault,\n       ismodified,\n       description\n  FROM gv$system_parameter2\n WHERE LOWER(name) LIKE '%parallel%'\n ORDER BY name, inst_id;",
         "enabled": true
       },
       {
@@ -537,6 +537,8 @@
         "enabled": true
       }
     ],
-    "origin": "community"
+    "origin": "community",
+    "origin_author": "bhthoughts",
+    "origin_updated": "2026-08-20"
   }
 }
