@@ -12,7 +12,7 @@ AI analysis instructions.
 |---|---|---|---|
 | [Blocking Sessions](reports/blocking_sessions.json) | 12 | @bhthoughts | 2026-08-22 |
 | [Database Health Check](reports/health_check.json) | 88 | @bhthoughts | 2026-08-21 |
-| [Database Resource Usage](reports/resource_usage.json) | 12 | @bhthoughts | 2026-08-22 |
+| [Database Resource Usage](reports/resource_usage.json) | 15 | @bhthoughts | 2026-08-22 |
 <!-- reports-table:end -->
 
 Author and last-updated come from this repository's git history, maintained
